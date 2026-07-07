@@ -72,6 +72,7 @@ class DragHeader(QFrame):
 
 class MainWindow(QWidget):
     hidden_to_tray = Signal()
+    permission_state_changed = Signal(bool)  # True while any session needs permission
 
     def __init__(self):
         super().__init__()
@@ -200,11 +201,12 @@ class MainWindow(QWidget):
         self.count_label.setText(self._count_text(sessions))
         self.empty_label.setVisible(not sessions)
 
-        self._update_blink_timer(sessions)
+        needs_permission = any(s.display_status == "permission" for s in sessions)
+        self._update_blink_timer(needs_permission)
+        self.permission_state_changed.emit(needs_permission)
         QTimer.singleShot(0, self._fit_height_to_content)
 
-    def _update_blink_timer(self, sessions):
-        needs_blink = any(s.display_status == "permission" for s in sessions)
+    def _update_blink_timer(self, needs_blink):
         if needs_blink and not self._blink_timer.isActive():
             self._blink_timer.start(BLINK_INTERVAL_MS)
         elif not needs_blink and self._blink_timer.isActive():

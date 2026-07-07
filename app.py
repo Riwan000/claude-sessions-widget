@@ -13,12 +13,16 @@ POLL_INTERVAL_MS = 2000
 LOCK_PATH = status_store.STATUS_DIR / "_widget.lock"
 
 
-def make_tray_icon():
+TRAY_COLOR_OK = "#22c55e"
+TRAY_COLOR_PERMISSION = "#ef4444"
+
+
+def make_tray_icon(color=TRAY_COLOR_OK):
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
-    painter.setBrush(QColor("#22c55e"))
+    painter.setBrush(QColor(color))
     painter.setPen(Qt.NoPen)
     painter.drawEllipse(8, 8, 48, 48)
     painter.end()
@@ -43,8 +47,27 @@ def main():
     window = MainWindow()
     window.show()
 
-    tray = QSystemTrayIcon(make_tray_icon(), app)
+    icon_ok = make_tray_icon(TRAY_COLOR_OK)
+    icon_permission = make_tray_icon(TRAY_COLOR_PERMISSION)
+
+    tray = QSystemTrayIcon(icon_ok, app)
     tray.setToolTip("Claude Sessions")
+
+    # Mirror the permission state in the tray so it's visible even while
+    # the window itself is hidden. Only touch the icon on actual changes -
+    # this fires on every 2s poll.
+    tray_state = {"permission": False}
+
+    def sync_tray_icon(needs_permission):
+        if needs_permission == tray_state["permission"]:
+            return
+        tray_state["permission"] = needs_permission
+        tray.setIcon(icon_permission if needs_permission else icon_ok)
+        tray.setToolTip(
+            "Claude Sessions — needs permission" if needs_permission else "Claude Sessions"
+        )
+
+    window.permission_state_changed.connect(sync_tray_icon)
 
     menu = QMenu()
 

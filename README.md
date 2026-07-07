@@ -80,6 +80,9 @@ venv is rebuilt).
 Covers the hook script's token accounting (including the message-id
 dedupe and resumed-session cases), process-tree walking, status
 transitions, and the status store's sorting/staleness/pruning logic.
+`tests/test_ui_render.py` additionally exercises the Qt layer offscreen
+(no window appears): row lifecycle, task elision at different widths,
+the permission blink/signal plumbing, and tray icon colors.
 
 ## Running
 
@@ -104,8 +107,10 @@ window edge to change the width. Height is automatic — it grows and shrinks
 with the number of sessions shown, capped at 80% of your screen height (it
 scrolls internally beyond that).
 
-It also adds a system tray icon (green dot) with a right-click menu:
-**Show/Hide**, **Clear finished**, **Quit**.
+It also adds a system tray icon with a right-click menu: **Show/Hide**,
+**Clear finished**, **Quit**. The icon doubles as a status light: green
+normally, red while any session is waiting on a permission prompt — so
+you still get the signal when the window itself is hidden to the tray.
 
 **Click any row** to jump to that session's terminal. This is *not* done by
 matching window/tab titles — an earlier version tried that and it was
@@ -138,14 +143,20 @@ best-effort but isn't guaranteed to be the exact right one. If nothing
 can be resolved at all (e.g. an old status file from before this feature
 existed, with no `shellPid` recorded), clicking is just a no-op.
 
-## Not included (by design)
+## Autostart on login
 
-- **Autostart on login** isn't set up. If you want the widget running
-  automatically, add a shortcut to
-  `shell:startup` (Win+R → `shell:startup`) pointing at:
-  ```
-  C:\Users\LEGION\Desktop\Claude_space\widget\.venv\Scripts\pythonw.exe C:\Users\LEGION\Desktop\Claude_space\widget\app.py
-  ```
+```powershell
+C:\Python313\python.exe install.py --autostart      # register
+C:\Python313\python.exe install.py --remove-autostart  # unregister
+```
+
+This writes a `ClaudeSessionsWidget` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at the venv's
+`pythonw.exe` (no console window). A plain `install.py` run refreshes the
+entry's paths if it already exists (e.g. after moving the project) but never
+creates one — enabling login autostart stays an explicit opt-in. The
+single-instance lock makes a login launch while the widget is already
+running a harmless no-op.
 
 ## Files
 
@@ -154,7 +165,7 @@ widget/
   app.py                 # entry point: window, tray icon, poll timer, single-instance lock
   status_store.py        # reads widget-status/*.json, sorts, flags stale/prunes old
   focus_session.ps1      # click-to-focus: walks the process tree, no title matching
-  install.py             # wires/re-wires the 6 hooks into ~/.claude/settings.json
+  install.py             # wires/re-wires the 6 hooks; --autostart manages the login Run entry
   ui/
     main_window.py         # frameless/translucent/always-on-top window
     session_row.py          # one row's widgets + rendering + click handling
