@@ -19,9 +19,11 @@ window height grows and shrinks automatically with the number of sessions.
      and `alert` = the notification text. Idle-input nudges (the other kind of
      Notification event) are ignored on purpose — this is only for permission
      prompts.
-   - `PostToolUse` (a tool actually ran) → `status: "running"` again, clearing
-     any permission alert. This is what turns the blinking off once you've
-     approved (or Claude Code proceeds after) the prompt.
+   - `PostToolUse` (a tool actually ran) → clears a `permission` state back
+     to `running` (proof the prompt was approved). It only touches records
+     currently in the permission state: Stop and PostToolUse are both async
+     hooks, so an unconditional write could land after Stop and flip a
+     finished session back to running.
    - `Stop` (Claude finishes responding) → `status: "finished"`, plus
      `tokens: {input, output}` for that turn (see below).
    - `SessionEnd` (the CLI actually exits) → deletes the file.
@@ -39,6 +41,12 @@ window height grows and shrinks automatically with the number of sessions.
    moment the prompt is submitted. `Stop` reads everything appended to that
    transcript since that offset and sums the `usage.input_tokens` /
    `usage.output_tokens` fields across every assistant message in that turn.
+   Usage is deduplicated by message id, because one API message can span
+   several transcript lines (e.g. separate entries for its thinking block
+   and its tool_use block) that each repeat the same usage object — summing
+   per line would roughly double the count. If no offset was ever recorded
+   (a resumed session where `UserPromptSubmit` never fired), the token field
+   is skipped rather than summing the entire transcript as one turn.
    This is the fresh input+output count — it deliberately excludes
    `cache_read_input_tokens`/`cache_creation_input_tokens`, which are often
    100x larger than the real per-turn cost due to prompt caching and would
@@ -53,12 +61,25 @@ window height grows and shrinks automatically with the number of sessions.
 cd widget
 C:\Python313\python.exe -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+C:\Python313\python.exe install.py
 ```
 
-The hook wiring in `~/.claude/settings.json` already points at
-`C:\Python313\python.exe` and this project's absolute path. If you move this
-project or reinstall Python elsewhere, update the 6 hook `command` entries
-(search for `widget_status.py` in that file).
+`install.py` wires the 6 hooks into `~/.claude/settings.json` (backing it up
+first) and is idempotent — re-run it any time you move this project folder
+or switch Python installs, and it updates the existing entries in place.
+Run it with the Python you want the hooks to use (the hook script is
+stdlib-only; avoid the venv interpreter so the hooks don't break if the
+venv is rebuilt).
+
+## Tests
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/
+```
+
+Covers the hook script's token accounting (including the message-id
+dedupe and resumed-session cases), process-tree walking, status
+transitions, and the status store's sorting/staleness/pruning logic.
 
 ## Running
 
@@ -72,9 +93,14 @@ To launch without a console window flashing, use `pythonw.exe` instead:
 .venv\Scripts\pythonw.exe app.py
 ```
 
+Only one instance runs at a time — a second launch (e.g. from a startup
+shortcut while one is already running) exits immediately instead of showing
+a duplicate window (`~/.claude/widget-status/_widget.lock`).
+
 The widget starts in the top-left-ish area by default and remembers wherever
-you drag it (position saved to `~/.claude/widget-status/_window.json`). Drag
-anywhere on the header to move it. Height is automatic — it grows and shrinks
+you drag it (position saved to `~/.claude/widget-status/_window.json`,
+debounced). Drag anywhere on the header to move it; drag the left or right
+window edge to change the width. Height is automatic — it grows and shrinks
 with the number of sessions shown, capped at 80% of your screen height (it
 scrolls internally beyond that).
 
@@ -125,14 +151,16 @@ existed, with no `shellPid` recorded), clicking is just a no-op.
 
 ```
 widget/
-  app.py                 # entry point: window, tray icon, poll timer
+  app.py                 # entry point: window, tray icon, poll timer, single-instance lock
   status_store.py        # reads widget-status/*.json, sorts, flags stale/prunes old
   focus_session.ps1      # click-to-focus: walks the process tree, no title matching
+  install.py             # wires/re-wires the 6 hooks into ~/.claude/settings.json
   ui/
     main_window.py         # frameless/translucent/always-on-top window
     session_row.py          # one row's widgets + rendering + click handling
     style.qss                # stylesheet
   hooks/
     widget_status.py        # the Claude Code hook script (see "How it works")
+  tests/                 # pytest suite for the hook script and status store
   requirements.txt
 ```

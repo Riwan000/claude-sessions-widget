@@ -141,19 +141,21 @@ def transcript_size(transcript_path):
 
 def sum_turn_tokens(transcript_path, offset):
     """Sums usage across every assistant message appended to the transcript
-    since `offset` (the byte offset recorded at UserPromptSubmit time)."""
-    if not transcript_path:
+    since `offset` (the byte offset recorded at UserPromptSubmit time).
+
+    One API message can span several JSONL lines (e.g. separate entries for
+    its thinking block and its tool_use block), each repeating the same
+    usage object - so usage is deduplicated by message id, not per line."""
+    if not transcript_path or offset is None:
         return None
     try:
         with open(transcript_path, "r", encoding="utf-8") as handle:
             handle.seek(offset)
             new_content = handle.read()
-    except OSError:
+    except (OSError, ValueError):
         return None
 
-    input_tokens = 0
-    output_tokens = 0
-    found = False
+    usage_by_message = {}
     for line in new_content.splitlines():
         line = line.strip()
         if not line:
@@ -162,77 +164,72 @@ def sum_turn_tokens(transcript_path, offset):
             entry = json.loads(line)
         except ValueError:
             continue
-        usage = entry.get("message", {}).get("usage")
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        usage = message.get("usage")
         if not isinstance(usage, dict):
             continue
-        found = True
+        # Entries without a message id can't be correlated, so each one
+        # counts once (keyed by its own entry uuid).
+        key = message.get("id") or entry.get("uuid") or id(entry)
+        usage_by_message[key] = usage
+
+    if not usage_by_message:
+        return None
+
+    input_tokens = 0
+    output_tokens = 0
+    for usage in usage_by_message.values():
         input_tokens += int(usage.get("input_tokens") or 0)
         output_tokens += int(usage.get("output_tokens") or 0)
-
-    if not found:
-        return None
     return {"input": input_tokens, "output": output_tokens}
 
 
-def handle_session_start(session_id, cwd, payload, shell_pid):
+def load_or_create(session_id, cwd, now, shell_pid):
+    """Loads the session's record (or scaffolds a fresh one) and refreshes
+    the fields every event keeps current. Returns (path, record)."""
     path = status_path(session_id)
-    now = time.time()
-    existing = load_existing(path)
-    record = existing or {
+    record = load_existing(path) or {
         "sessionId": session_id,
-        "project": Path(cwd).name or cwd,
-        "cwd": cwd,
         "task": "",
         "status": "idle",
         "startedAt": now,
     }
     record["cwd"] = cwd
     record["project"] = Path(cwd).name or cwd
-    record["pid"] = os.getpid()
-    record["shellPid"] = shell_pid
     record["updatedAt"] = now
+    record["shellPid"] = shell_pid
+    return path, record
+
+
+def handle_session_start(session_id, cwd, payload, shell_pid):
+    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
+    record["pid"] = os.getpid()
     atomic_write(path, record)
 
 
 def handle_prompt_submit(session_id, cwd, payload, shell_pid):
-    path = status_path(session_id)
-    now = time.time()
-    record = load_existing(path) or {
-        "sessionId": session_id,
-        "project": Path(cwd).name or cwd,
-        "cwd": cwd,
-        "startedAt": now,
-    }
+    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
     prompt = payload.get("prompt") or payload.get("message") or ""
-    record["cwd"] = cwd
-    record["project"] = Path(cwd).name or cwd
     record["task"] = truncate(prompt)
     record["status"] = "running"
-    record["updatedAt"] = now
-    record["shellPid"] = shell_pid
     record["transcriptPath"] = payload.get("transcript_path") or record.get("transcriptPath")
     record["transcriptOffset"] = transcript_size(record["transcriptPath"])
     atomic_write(path, record)
 
 
 def handle_stop(session_id, cwd, payload, shell_pid):
-    path = status_path(session_id)
-    now = time.time()
-    record = load_existing(path) or {
-        "sessionId": session_id,
-        "project": Path(cwd).name or cwd,
-        "cwd": cwd,
-        "task": "",
-        "startedAt": now,
-    }
+    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
     transcript_path = payload.get("transcript_path") or record.get("transcriptPath")
-    tokens = sum_turn_tokens(transcript_path, record.get("transcriptOffset", 0))
+    # No recorded offset means prompt-submit never ran for this turn (e.g. a
+    # resumed session) - summing from 0 would count the entire transcript as
+    # one turn, so skip the token field instead.
+    tokens = sum_turn_tokens(transcript_path, record.get("transcriptOffset"))
     if tokens is not None:
         record["tokens"] = tokens
 
     record["status"] = "finished"
-    record["updatedAt"] = now
-    record["shellPid"] = shell_pid
     atomic_write(path, record)
 
 
@@ -245,27 +242,21 @@ def handle_notification(session_id, cwd, payload, shell_pid):
     if "permission" not in message.lower():
         return  # not a permission prompt (e.g. idle-input nudge) - ignore
 
-    path = status_path(session_id)
-    now = time.time()
-    record = load_existing(path) or {
-        "sessionId": session_id,
-        "project": Path(cwd).name or cwd,
-        "cwd": cwd,
-        "task": "",
-        "startedAt": now,
-    }
+    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
     record["status"] = "permission"
     record["alert"] = truncate(message)
-    record["updatedAt"] = now
-    record["shellPid"] = shell_pid
     atomic_write(path, record)
 
 
 def handle_tool_complete(session_id, cwd, payload, shell_pid):
+    """Clears a permission alert once a tool actually runs (proof it was
+    approved). Only touches records currently in the permission state:
+    Stop and PostToolUse hooks are both async, so an unconditional write
+    here could land after Stop and flip a finished session back to running."""
     path = status_path(session_id)
     record = load_existing(path)
-    if record is None:
-        return  # no prior SessionStart record for this session - nothing to clear
+    if record is None or record.get("status") != "permission":
+        return
     record["status"] = "running"
     record["alert"] = ""
     record["updatedAt"] = time.time()

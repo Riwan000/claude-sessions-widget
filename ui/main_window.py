@@ -27,6 +27,8 @@ MIN_WINDOW_HEIGHT = 110
 MAX_WINDOW_HEIGHT_RATIO = 0.8
 MAX_WINDOW_HEIGHT_FALLBACK = 640
 BLINK_INTERVAL_MS = 500
+GEOMETRY_SAVE_DEBOUNCE_MS = 500
+RESIZE_EDGE_MARGIN = 8
 
 
 def load_window_geometry():
@@ -85,11 +87,18 @@ class MainWindow(QWidget):
         self._blink_on = False
         self._build_ui()
         self.setStyleSheet(STYLE_PATH.read_text(encoding="utf-8"))
-        self.refresh()
 
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_blink)
-        self._blink_timer.start(BLINK_INTERVAL_MS)
+
+        # Debounce geometry persistence: a window drag fires moveEvent for
+        # every pixel, which would mean dozens of file writes per second.
+        self._geometry_save_timer = QTimer(self)
+        self._geometry_save_timer.setSingleShot(True)
+        self._geometry_save_timer.timeout.connect(self._persist_geometry)
+        QApplication.instance().aboutToQuit.connect(self._persist_geometry)
+
+        self.refresh()
 
     def _build_ui(self):
         root = QFrame(self)
@@ -191,7 +200,16 @@ class MainWindow(QWidget):
         self.count_label.setText(self._count_text(sessions))
         self.empty_label.setVisible(not sessions)
 
+        self._update_blink_timer(sessions)
         QTimer.singleShot(0, self._fit_height_to_content)
+
+    def _update_blink_timer(self, sessions):
+        needs_blink = any(s.display_status == "permission" for s in sessions)
+        if needs_blink and not self._blink_timer.isActive():
+            self._blink_timer.start(BLINK_INTERVAL_MS)
+        elif not needs_blink and self._blink_timer.isActive():
+            self._blink_timer.stop()
+            self._blink_on = False
 
     def _count_text(self, sessions):
         if not sessions:
@@ -235,13 +253,28 @@ class MainWindow(QWidget):
         if target_height != current.height():
             self.resize(current.width(), target_height)
 
+    def mousePressEvent(self, event):
+        # The auto-height logic owns the vertical dimension, but width is
+        # still the user's: dragging the left/right window edge starts a
+        # native horizontal resize (this replaced the QSizeGrip, which
+        # fought the auto-height by resizing both dimensions).
+        if event.button() == Qt.LeftButton and self.windowHandle() is not None:
+            x = event.position().x()
+            if x <= RESIZE_EDGE_MARGIN:
+                self.windowHandle().startSystemResize(Qt.LeftEdge)
+                return
+            if x >= self.width() - RESIZE_EDGE_MARGIN:
+                self.windowHandle().startSystemResize(Qt.RightEdge)
+                return
+        super().mousePressEvent(event)
+
     def moveEvent(self, event):
         super().moveEvent(event)
-        self._persist_geometry()
+        self._geometry_save_timer.start(GEOMETRY_SAVE_DEBOUNCE_MS)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._persist_geometry()
+        self._geometry_save_timer.start(GEOMETRY_SAVE_DEBOUNCE_MS)
 
     def _persist_geometry(self):
         geo = self.geometry()

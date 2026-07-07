@@ -46,9 +46,22 @@ function Focus-Hwnd([IntPtr]$hwnd) {
     return [WidgetFocusWin32]::SetForegroundWindow($hwnd)
 }
 
-# pid -> parent-pid map, built once (cheaper than one WMI query per ancestor)
+# pid -> parent-pid and pid -> exe-name maps, built once
+# (cheaper than one WMI query per ancestor)
 $parentOf = @{}
-Get-CimInstance Win32_Process | ForEach-Object { $parentOf[[int]$_.ProcessId] = [int]$_.ParentProcessId }
+$nameOf = @{}
+Get-CimInstance Win32_Process | ForEach-Object {
+    $parentOf[[int]$_.ProcessId] = [int]$_.ParentProcessId
+    $nameOf[[int]$_.ProcessId] = [string]$_.Name
+}
+
+# Windows recycles pids: if the recorded claude.exe died without a
+# SessionEnd hook (crash, force-closed terminal), some unrelated process may
+# now own this pid - walking up from it would focus a random window.
+if ($nameOf[$ShellPid] -ne 'claude.exe') {
+    Write-Output "NOT_FOUND"
+    exit 0
+}
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
 $windowCondition = New-Object System.Windows.Automation.PropertyCondition(

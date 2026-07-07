@@ -2,7 +2,7 @@
 
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QLockFile, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -10,6 +10,7 @@ import status_store
 from ui.main_window import MainWindow
 
 POLL_INTERVAL_MS = 2000
+LOCK_PATH = status_store.STATUS_DIR / "_widget.lock"
 
 
 def make_tray_icon():
@@ -27,6 +28,17 @@ def make_tray_icon():
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # One widget at a time: a second launch (e.g. from a startup shortcut
+    # while one is already running) would silently show two overlapping
+    # copies, one of which may be running stale code. QLockFile self-heals
+    # if the previous owner crashed without releasing the lock.
+    status_store.STATUS_DIR.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(LOCK_PATH))
+    lock.setStaleLockTime(0)  # 0 = a lock from a dead process is always reclaimable
+    if not lock.tryLock(100):
+        print("Claude Sessions widget is already running.", file=sys.stderr)
+        sys.exit(0)
 
     window = MainWindow()
     window.show()

@@ -14,7 +14,8 @@ STATUS_LABELS = {
     "permission": "needs permission",
 }
 
-TASK_ELIDE_WIDTH = 240
+TASK_ELIDE_MIN_WIDTH = 80
+TASK_ELIDE_PADDING = 4
 
 
 def _apply_property(widget, name, value):
@@ -30,6 +31,7 @@ class SessionRow(QFrame):
         super().__init__(parent)
         self.setObjectName("sessionRow")
         self.session_id = session.session_id
+        self._task_text = ""
         self.setCursor(Qt.PointingHandCursor)
 
         outer = QHBoxLayout(self)
@@ -88,12 +90,10 @@ class SessionRow(QFrame):
         self.project_label.setText(session.project)
 
         if session.display_status == "permission" and session.alert:
-            task_text = session.alert
+            self._task_text = session.alert
         else:
-            task_text = session.task or STATUS_LABELS.get(session.display_status, "")
-        fm = QFontMetrics(self.task_label.font())
-        elided = fm.elidedText(task_text, Qt.ElideRight, TASK_ELIDE_WIDTH)
-        self.task_label.setText(elided)
+            self._task_text = session.task or STATUS_LABELS.get(session.display_status, "")
+        self._apply_task_elide()
 
         status_word = STATUS_LABELS.get(session.display_status, session.display_status)
         tooltip_lines = [f"{session.project} — {status_word}", session.task or "(no task yet)"]
@@ -119,6 +119,15 @@ class SessionRow(QFrame):
         state = "on" if on else "off"
         for widget in (self.accent_bar, self.status_dot):
             _apply_property(widget, "blink", state)
+
+    def _apply_task_elide(self):
+        available = max(TASK_ELIDE_MIN_WIDTH, self.task_label.width() - TASK_ELIDE_PADDING)
+        fm = QFontMetrics(self.task_label.font())
+        self.task_label.setText(fm.elidedText(self._task_text, Qt.ElideRight, available))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_task_elide()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
