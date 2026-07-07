@@ -20,7 +20,30 @@ edges of the running widget and resize.
 - Note: only the ~14px gutter at the window edges reaches the main
   window's mouse handler; clicks on a session row won't trigger resize.
 
-## 2. Exact-tab focus with multiple Windows Terminal windows — known limitation
+## 2. Click-to-focus: verify it visually now that FOCUS_DENIED is fixed
+
+Discovered 2026-07-08: `focus_session.ps1` was finding the right window
+(`MATCHED_PID`) but never actually verifying `SetForegroundWindow`
+succeeded — Windows silently denies that call from a process with no
+"recent input" of its own, which is exactly what a helper process spawned
+via `QProcess.startDetached` looks like. Fixed by attaching the calling
+thread's input queue to the current foreground thread (`AttachThreadInput`)
+before calling `SetForegroundWindow`, then verifying the switch actually
+happened afterward. Every attempt now logs to
+`~/.claude/widget-status/_focus.log` (`FOCUSED` / `FOCUS_DENIED` /
+`NOT_FOUND`) since a denied call has no other visible symptom.
+
+Tested by scripting the exact scenario (unrelated foreground app + calling
+from an unrelated process) and confirming the terminal actually became
+foreground afterward, not just that the script printed success. **Still
+needs one real click from the widget UI itself** to close the loop — if a
+row-click ever does nothing, check `_focus.log` first. A `FOCUS_DENIED`
+line most likely means the terminal is elevated (Run as Administrator)
+while the widget isn't — UIPI blocks focus-stealing across privilege
+levels and no user-mode trick can bypass that; run both at the same
+elevation level to fix it.
+
+## 3. Exact-tab focus with multiple Windows Terminal windows — known limitation
 
 Click-to-focus walks the process tree from the stored `shellPid` (the
 `claude.exe` pid) up to the ancestor owning a top-level window
@@ -38,7 +61,7 @@ Ideas if ever revisiting (all unvalidated):
   currently obtain for an existing session.
 - Accept as-is (current state; documented in README).
 
-## 3. PostToolUse hook overhead — accepted, could revisit
+## 4. PostToolUse hook overhead — accepted, could revisit
 
 Every tool call in every session spawns `python.exe` (~50-100ms, async)
 just to maybe clear a permission state (`handle_tool_complete` early-exits
@@ -48,7 +71,7 @@ blink instantly on approval. If overhead ever matters: drop the
 `Stop`/`prompt-submit` clear the permission state instead (worse UX:
 blinking persists until turn end).
 
-## 4. Smaller / optional
+## 5. Smaller / optional
 
 - **No git remote** — repo is local-only. `gh repo create` + push if
   wanted.

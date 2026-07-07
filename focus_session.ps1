@@ -17,7 +17,16 @@
   Terminal does not expose a per-tab process id via UI Automation - so this
   falls back to whichever of that process's windows is found first.
 
-  Prints one of: MATCHED_PID:<pid> / NOT_FOUND
+  Windows also silently denies SetForegroundWindow calls from a process
+  that doesn't hold "recent input" permission - which a freshly spawned
+  helper process (this script, launched via QProcess.startDetached) never
+  does on its own. AttachThreadInput borrows that permission from whichever
+  thread currently owns the real foreground window for the duration of the
+  call. The result is verified afterward (not just assumed) and logged to
+  widget-status\_focus.log, since a denied call fails silently otherwise -
+  nothing throws, the window just never comes forward.
+
+  Prints one of: MATCHED_PID:<pid> / MATCHED_PID:<pid>:FOCUS_DENIED / NOT_FOUND
 #>
 param(
     [Parameter(Mandatory = $true)]
@@ -35,15 +44,62 @@ public class WidgetFocusWin32 {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 }
 "@
+
+$LogPath = Join-Path $env:USERPROFILE ".claude\widget-status\_focus.log"
+
+function Write-FocusLog([string]$line) {
+    try {
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -Path $LogPath -Value "$timestamp  $line" -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+function Get-WindowProcessId([IntPtr]$hwnd) {
+    [uint32]$processId = 0
+    [WidgetFocusWin32]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
+    return $processId
+}
+
+function Get-WindowThreadId([IntPtr]$hwnd) {
+    # The out-parameter of GetWindowThreadProcessId is the process id; the
+    # function's own return value is the thread id, which is what
+    # AttachThreadInput actually needs.
+    [uint32]$unusedProcessId = 0
+    return [WidgetFocusWin32]::GetWindowThreadProcessId($hwnd, [ref]$unusedProcessId)
+}
 
 function Focus-Hwnd([IntPtr]$hwnd) {
     if ($hwnd -eq [IntPtr]::Zero) { return $false }
     if ([WidgetFocusWin32]::IsIconic($hwnd)) {
         [WidgetFocusWin32]::ShowWindow($hwnd, 9) | Out-Null  # SW_RESTORE
     }
-    return [WidgetFocusWin32]::SetForegroundWindow($hwnd)
+
+    $foregroundThreadId = Get-WindowThreadId ([WidgetFocusWin32]::GetForegroundWindow())
+    $currentThreadId = [WidgetFocusWin32]::GetCurrentThreadId()
+
+    $attached = $false
+    if ($foregroundThreadId -ne 0 -and $foregroundThreadId -ne $currentThreadId) {
+        $attached = [WidgetFocusWin32]::AttachThreadInput($currentThreadId, $foregroundThreadId, $true)
+    }
+
+    [WidgetFocusWin32]::SetForegroundWindow($hwnd) | Out-Null
+    [WidgetFocusWin32]::BringWindowToTop($hwnd) | Out-Null
+
+    if ($attached) {
+        [WidgetFocusWin32]::AttachThreadInput($currentThreadId, $foregroundThreadId, $false) | Out-Null
+    }
+
+    Start-Sleep -Milliseconds 50
+    $targetProcessId = Get-WindowProcessId $hwnd
+    $resultProcessId = Get-WindowProcessId ([WidgetFocusWin32]::GetForegroundWindow())
+    return $resultProcessId -eq $targetProcessId
 }
 
 # pid -> parent-pid and pid -> exe-name maps, built once
@@ -59,6 +115,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
 # SessionEnd hook (crash, force-closed terminal), some unrelated process may
 # now own this pid - walking up from it would focus a random window.
 if ($nameOf[$ShellPid] -ne 'claude.exe') {
+    Write-FocusLog "ShellPid=$ShellPid : NOT_FOUND (pid not claude.exe - stale record?)"
     Write-Output "NOT_FOUND"
     exit 0
 }
@@ -77,8 +134,14 @@ while ($current -and $current -ne 0 -and $visited.Add($current)) {
     foreach ($win in $allWindows) {
         if ($win.Current.ProcessId -eq $current) {
             $hwnd = [IntPtr]$win.Current.NativeWindowHandle
-            Focus-Hwnd $hwnd | Out-Null
-            Write-Output "MATCHED_PID:$current"
+            $focused = Focus-Hwnd $hwnd
+            if ($focused) {
+                Write-FocusLog "ShellPid=$ShellPid -> hwnd pid=$current : FOCUSED"
+                Write-Output "MATCHED_PID:$current"
+            } else {
+                Write-FocusLog "ShellPid=$ShellPid -> hwnd pid=$current : FOCUS_DENIED (window found but did not become foreground - possible causes: elevated/admin terminal vs non-elevated widget, different virtual desktop, or OS focus-steal lock)"
+                Write-Output "MATCHED_PID:$current`:FOCUS_DENIED"
+            }
             exit 0
         }
     }
@@ -86,4 +149,5 @@ while ($current -and $current -ne 0 -and $visited.Add($current)) {
     $current = $parentOf[$current]
 }
 
+Write-FocusLog "ShellPid=$ShellPid : NOT_FOUND (no ancestor owns a top-level window)"
 Write-Output "NOT_FOUND"

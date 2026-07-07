@@ -143,6 +143,22 @@ best-effort but isn't guaranteed to be the exact right one. If nothing
 can be resolved at all (e.g. an old status file from before this feature
 existed, with no `shellPid` recorded), clicking is just a no-op.
 
+Finding the right window isn't enough on its own — Windows silently denies
+`SetForegroundWindow` calls from a process with no "recent input" of its
+own, which is exactly what a helper process spawned just to do the
+focusing (`QProcess.startDetached`) looks like from the OS's perspective.
+Nothing throws in that case; the call just does nothing. `focus_session.ps1`
+works around this with `AttachThreadInput` (borrowing foreground permission
+from whichever thread currently owns the real foreground window for the
+duration of the call), then verifies the switch actually happened
+afterward instead of assuming success. Every attempt — matched, denied, or
+not-found — is appended to `~/.claude/widget-status/_focus.log`, since a
+denied focus call has no other visible symptom. If clicking a row ever
+stops working, that log says why (a `FOCUS_DENIED` line most likely means
+the terminal is running elevated/as-Administrator while the widget isn't,
+since UIPI blocks focus-stealing across privilege levels no matter what;
+matching them fixes it).
+
 ## Autostart on login
 
 ```powershell
