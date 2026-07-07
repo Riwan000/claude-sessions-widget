@@ -1,0 +1,125 @@
+QWidget#root {
+    background-color: rgba(18, 18, 22, 235);
+    border-radius: 14px;
+}
+
+QFrame#header {
+    background: transparent;
+}
+
+QLabel#titleLabel {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#countLabel {
+    color: #8b8f9a;
+    font-size: 11px;
+    padding-left: 4px;
+}
+
+QPushButton#hideButton {
+    background: transparent;
+    color: #8b8f9a;
+    border: none;
+    font-size: 13px;
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+QPushButton#hideButton:hover {
+    background-color: rgba(255, 255, 255, 25);
+    color: #e5e7eb;
+}
+
+QFrame#sessionRow {
+    background-color: rgba(255, 255, 255, 10);
+    border-radius: 10px;
+}
+QFrame#sessionRow:hover {
+    background-color: rgba(255, 255, 255, 18);
+}
+QFrame#sessionRow[status="permission"] {
+    background-color: rgba(239, 68, 68, 40);
+}
+QFrame#sessionRow[status="permission"]:hover {
+    background-color: rgba(239, 68, 68, 55);
+}
+
+QFrame#accentBar {
+    border-radius: 2px;
+}
+QFrame#accentBar[status="running"] { background-color: #22c55e; }
+QFrame#accentBar[status="idle"] { background-color: #38bdf8; }
+QFrame#accentBar[status="finished"] { background-color: #52525b; }
+QFrame#accentBar[status="stale"] { background-color: #f59e0b; }
+QFrame#accentBar[status="permission"][blink="on"] { background-color: #ef4444; }
+QFrame#accentBar[status="permission"][blink="off"] { background-color: #7f1d1d; }
+
+QLabel#statusDot {
+    border-radius: 4px;
+}
+QLabel#statusDot[status="running"] { background-color: #22c55e; }
+QLabel#statusDot[status="idle"] { background-color: #38bdf8; }
+QLabel#statusDot[status="finished"] { background-color: #52525b; }
+QLabel#statusDot[status="stale"] { background-color: #f59e0b; }
+QLabel#statusDot[status="permission"][blink="on"] { background-color: #ef4444; }
+QLabel#statusDot[status="permission"][blink="off"] { background-color: #7f1d1d; }
+
+QLabel#projectLabel {
+    color: #f4f4f5;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#taskLabel {
+    color: #a1a1aa;
+    font-size: 11px;
+}
+
+QLabel#timeLabel {
+    color: #71717a;
+    font-size: 10px;
+}
+
+QLabel#tokenLabel {
+    color: #8b8f9a;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+QLabel#emptyLabel {
+    color: #71717a;
+    font-size: 12px;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollArea > QWidget {
+    background: transparent;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 40);
+    border-radius: 4px;
+    min-height: 24px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QSizeGrip {
+    background: transparent;
+    width: 12px;
+    height: 12px;
+}
