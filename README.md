@@ -139,9 +139,14 @@ expose which of its windows/tabs hosts which child process via UI
 Automation — so in that case it foregrounds whichever of that process's
 windows was **most recently in the foreground** (confirmed empirically: it's
 z-order-based, not an arbitrary/fixed pick), which is a reasonable
-best-effort but isn't guaranteed to be the exact right one. If nothing
-can be resolved at all (e.g. an old status file from before this feature
-existed, with no `shellPid` recorded), clicking is just a no-op.
+best-effort but isn't guaranteed to be the exact right one. This is a
+confirmed gap in Windows Terminal itself, not something fixable from
+outside it — see [microsoft/terminal#18692](https://github.com/microsoft/terminal/issues/18692)
+(open, unresolved as of this writing; the only known workaround is
+`ReadProcessMemory` into WT's own memory, not something to depend on).
+If nothing can be resolved at all (e.g. an old status file from before
+this feature existed, with no `shellPid` recorded), clicking is just a
+no-op.
 
 Finding the right window isn't enough on its own — Windows silently denies
 `SetForegroundWindow` calls from a process with no "recent input" of its

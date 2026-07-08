@@ -43,23 +43,48 @@ while the widget isn't — UIPI blocks focus-stealing across privilege
 levels and no user-mode trick can bypass that; run both at the same
 elevation level to fix it.
 
-## 3. Exact-tab focus with multiple Windows Terminal windows — known limitation
+## 3. Exact focus with multiple Windows Terminal windows — confirmed unfixable with public APIs
 
 Click-to-focus walks the process tree from the stored `shellPid` (the
 `claude.exe` pid) up to the ancestor owning a top-level window
-(`focus_session.ps1`). Confirmed limitation: all WT windows share one
-process, and WT exposes no per-tab child-process mapping via UI
-Automation — so with 2+ WT windows open it foregrounds whichever of that
-process's windows was most recently focused (z-order), not necessarily
-the right one. It never picks a wrong *project* anymore (the old
-title-matching bug), just possibly the wrong *window* of the right app.
+(`focus_session.ps1`). Confirmed on 2026-07-08 (this isn't a "might be a
+tabs thing" anymore — actually inspected live):
 
-Ideas if ever revisiting (all unvalidated):
-- `WT_SESSION` env var — hooks could capture it, but there's no public
-  API to map `WT_SESSION` → window/tab either.
-- Drive WT via `wt.exe -w <id> focus-tab` — needs a window id we can't
-  currently obtain for an existing session.
-- Accept as-is (current state; documented in README).
+- This machine has 2+ real, separate Windows Terminal **windows** open
+  (not just tabs of one), confirmed via UI Automation
+  (`ProcessIdProperty` query returned 2 distinct `NativeWindowHandle`
+  values, titled e.g. `✳ market-insight` and `⠂ <task summary>`) — both
+  owned by the **same OS process**. UI Automation can only match by
+  `ProcessId`, so with 2+ windows sharing one pid there is no property
+  that tells you which one hosts which shell; the script just takes
+  whichever window enumerates first (usually whatever's already
+  frontmost — not necessarily right).
+- Confirmed the window title cannot be used as a tiebreaker either: this
+  session's raw hook-recorded task was `"continue"` (the literal last
+  prompt) while the live window title was `⠂ Implement TODO fixes and
+  autostart setup` (Claude Code's own AI-summarized title) — the two
+  don't correlate, which is exactly why the original design rejected
+  title-matching. There's no salvageable fuzzy-match here.
+- Checked upstream: microsoft/terminal issue
+  [#18692](https://github.com/microsoft/terminal/issues/18692) asks for
+  exactly this capability (query which tab/window hosts a given
+  process), is still **open**, parked in their "Icebox," and the only
+  known workaround anyone's found is `ReadProcessMemory` into WT's own
+  memory to read internal tab-index state — not something to build a
+  feature on (breaks on every WT update, no supported API).
+- `wt.exe focus-tab -t <index>` exists but needs a tab index we have no
+  way to derive from a bare child-process pid.
+
+**Conclusion: not solvable from our side today.** It's a confirmed,
+still-unresolved gap in Windows Terminal itself, not a bug in this
+widget. Click-to-focus still correctly avoids the old failure mode
+(bringing forward a totally unrelated app) but can't guarantee the exact
+right WT window when 2+ are open. The only real lever: run sessions you
+want guaranteed-precise focus on in a genuinely separate-process
+terminal host (plain `conhost`-based `cmd.exe`/`powershell.exe`, not
+Windows Terminal) — those really are one process per window, so the
+existing pid-walk logic already handles them exactly. Revisit only if
+Microsoft ships a fix for #18692.
 
 ## 4. PostToolUse hook overhead — accepted, could revisit
 
