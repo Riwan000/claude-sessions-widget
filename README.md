@@ -7,13 +7,35 @@ window height grows and shrinks automatically with the number of sessions.
 
 ## How it works
 
-1. Six hooks are wired into the **global** `~/.claude/settings.json`
-   (`SessionStart`, `UserPromptSubmit`, `Notification`, `PostToolUse`, `Stop`,
-   `SessionEnd`). Each one calls `hooks/widget_status.py <event>` with the
-   Claude Code hook JSON on stdin.
+1. Seven hooks are wired into the **global** `~/.claude/settings.json`
+   (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Notification`,
+   `PostToolUse`, `Stop`, `SessionEnd`). Each one calls
+   `hooks/widget_status.py <event>` with the Claude Code hook JSON on stdin.
 2. That script writes one JSON file per session to `~/.claude/widget-status/`:
-   - `SessionStart` → creates the file, `status: "idle"`.
-   - `UserPromptSubmit` → `status: "running"`, `task` = the prompt text.
+   - `SessionStart` → creates the file, `status: "idle"`, and sniffs
+     `languageIcon` once from top-level marker files in the project
+     directory (`pyproject.toml`/`requirements.txt`/`setup.py`/any `*.py`
+     → 🐍, `package.json` → 📦, `Cargo.toml` → 🦀, `go.mod` → 🐹). Cached on
+     first write and never recomputed, so it can't flicker mid-session —
+     see `detect_language_icon()`. Shown as a prefix on the project name
+     (e.g. "🐍 widget").
+   - `UserPromptSubmit` → `status: "running"`, `task` = the prompt text, and
+     clears any leftover tool line from the previous turn.
+   - `PreToolUse` (a tool is about to run) → `currentTool` = the tool name,
+     `currentToolDetail` = a one-line human description derived from
+     `tool_input` (e.g. `Read` on `README.md` → "Reading README.md", `Bash`
+     with `pytest tests/` → "Running pytest tests/"). Unrecognized tools
+     (custom/MCP tools) fall back to "Using \<ToolName\>" rather than showing
+     nothing. This line takes priority over the plain task text in the row
+     while it's set, so you can see what Claude is actually doing turn by
+     turn — see `describe_tool_use()`. The same `currentTool` value also
+     drives a short "personality" tag next to the project name (e.g. "✏️
+     Editing", "🧠 Thinking" while no tool is active yet this turn, "✅
+     Done" once finished, "💤 Idle" before the first prompt) — computed
+     purely in the UI from data already in the status file, see
+     `_personality_text()` in `ui/session_row.py`. It's suppressed for the
+     `permission` and `stale` states, which already have their own
+     dedicated visual treatment.
    - `Notification` → if the message mentions "permission" (Claude Code sends
      this whenever it needs you to approve a tool call), `status: "permission"`
      and `alert` = the notification text. Idle-input nudges (the other kind of
@@ -25,7 +47,8 @@ window height grows and shrinks automatically with the number of sessions.
      hooks, so an unconditional write could land after Stop and flip a
      finished session back to running.
    - `Stop` (Claude finishes responding) → `status: "finished"`, plus
-     `tokens: {input, output}` for that turn (see below).
+     `tokens: {input, output}` for that turn (see below), and clears the
+     tool line.
    - `SessionEnd` (the CLI actually exits) → deletes the file.
 3. `app.py` polls that directory every 2 seconds and renders one row per file.
    - A `running` session whose file hasn't been touched in 10+ minutes is
@@ -64,7 +87,7 @@ C:\Python313\python.exe -m venv .venv
 C:\Python313\python.exe install.py
 ```
 
-`install.py` wires the 6 hooks into `~/.claude/settings.json` (backing it up
+`install.py` wires the 7 hooks into `~/.claude/settings.json` (backing it up
 first) and is idempotent — re-run it any time you move this project folder
 or switch Python installs, and it updates the existing entries in place.
 Run it with the Python you want the hooks to use (the hook script is
@@ -164,20 +187,24 @@ the terminal is running elevated/as-Administrator while the widget isn't,
 since UIPI blocks focus-stealing across privilege levels no matter what;
 matching them fixes it).
 
-## Autostart on login
+## Lifecycle
 
-```powershell
-C:\Python313\python.exe install.py --autostart      # register
-C:\Python313\python.exe install.py --remove-autostart  # unregister
-```
+The widget starts and stops itself around your Claude Code CLI sessions —
+no login autostart needed:
 
-This writes a `ClaudeSessionsWidget` value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at the venv's
-`pythonw.exe` (no console window). A plain `install.py` run refreshes the
-entry's paths if it already exists (e.g. after moving the project) but never
-creates one — enabling login autostart stays an explicit opt-in. The
-single-instance lock makes a login launch while the widget is already
-running a harmless no-op.
+- **Start**: the `SessionStart` hook (`hooks/widget_status.py:spawn_widget`)
+  launches the widget with the venv's `pythonw.exe` (no console window) the
+  first time a Claude Code session starts. The single-instance lock makes
+  every subsequent session's launch attempt a harmless no-op.
+- **Stop**: the widget polls its status directory every 2s
+  (`app.py:quit_if_idle`) and quits once no session status file remains —
+  i.e. once the last session's `SessionEnd` hook has fired.
+
+Optional: `install.py --autostart` / `--remove-autostart` still registers a
+`ClaudeSessionsWidget` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` if you'd rather have
+the widget up before your first session starts. A plain `install.py` run
+refreshes the entry's paths if it already exists but never creates one.
 
 ## Files
 

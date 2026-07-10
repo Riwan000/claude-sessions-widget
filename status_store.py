@@ -27,6 +27,9 @@ class Session:
     tokens_in: int = 0
     tokens_out: int = 0
     shell_pid: int = 0
+    current_tool: str = ""
+    current_tool_detail: str = ""
+    language_icon: str = ""
 
     @property
     def has_tokens(self):
@@ -73,6 +76,9 @@ def _load_one(path):
         tokens_in=int(tokens.get("input") or 0),
         tokens_out=int(tokens.get("output") or 0),
         shell_pid=int(data.get("shellPid") or 0),
+        current_tool=data.get("currentTool", ""),
+        current_tool_detail=data.get("currentToolDetail", ""),
+        language_icon=data.get("languageIcon", ""),
     )
 
 

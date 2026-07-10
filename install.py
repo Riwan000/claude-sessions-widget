@@ -1,4 +1,4 @@
-"""Wires (or re-wires) the widget's 6 hooks into ~/.claude/settings.json.
+"""Wires (or re-wires) the widget's 7 hooks into ~/.claude/settings.json.
 
 Idempotent: safe to re-run after moving this project folder or switching
 Python installs - existing widget entries are updated in place, missing
@@ -10,8 +10,14 @@ Run it with the Python you want the hooks to use, e.g.:
 (The hook script is stdlib-only, so any Python 3.9+ works. Avoid the
 project venv interpreter unless you're sure the venv will never move.)
 
-Autostart on login (HKCU Run registry entry, launches the widget with the
-venv's pythonw.exe so no console window appears):
+The widget now launches itself from the SessionStart hook (see
+hooks/widget_status.py:spawn_widget) and quits itself once no session
+status file remains (see app.py:quit_if_idle) - it lives exactly as long
+as at least one Claude Code CLI session does. No login autostart needed.
+
+The HKCU Run entry below is a legacy/optional alternative (e.g. if you
+want the widget up before your first session starts) - launches the
+widget with the venv's pythonw.exe so no console window appears:
     install.py --autostart           # add / refresh the entry
     install.py --remove-autostart    # delete the entry
 A plain run refreshes an existing autostart entry's paths but never
@@ -37,6 +43,7 @@ AUTOSTART_APP = WIDGET_DIR / "app.py"
 HOOK_EVENTS = {
     "SessionStart": "session-start",
     "UserPromptSubmit": "prompt-submit",
+    "PreToolUse": "tool-start",
     "Notification": "notification",
     "PostToolUse": "tool-complete",
     "Stop": "stop",
@@ -170,7 +177,7 @@ def main():
     }
 
     if set(results.values()) == {"unchanged"}:
-        print("All 6 widget hooks already up to date - nothing written.")
+        print("All 7 widget hooks already up to date - nothing written.")
     else:
         backup = SETTINGS_PATH.with_name(
             f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}"

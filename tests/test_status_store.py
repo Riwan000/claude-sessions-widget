@@ -81,6 +81,31 @@ class TestGetSessions:
         assert not session.has_tokens
         assert session.shell_pid == 0
 
+    def test_current_tool_detail_is_loaded(self, status_dir):
+        write_session(
+            status_dir, "t", "running", 5,
+            currentTool="Edit", currentToolDetail="Editing app.py",
+        )
+        session = status_store.get_sessions()[0]
+        assert session.current_tool == "Edit"
+        assert session.current_tool_detail == "Editing app.py"
+
+    def test_missing_current_tool_defaults_to_empty(self, status_dir):
+        write_session(status_dir, "t", "running", 5)
+        session = status_store.get_sessions()[0]
+        assert session.current_tool == ""
+        assert session.current_tool_detail == ""
+
+    def test_language_icon_is_loaded(self, status_dir):
+        write_session(status_dir, "t", "running", 5, languageIcon="🐍")
+        session = status_store.get_sessions()[0]
+        assert session.language_icon == "🐍"
+
+    def test_missing_language_icon_defaults_to_empty(self, status_dir):
+        write_session(status_dir, "t", "running", 5)
+        session = status_store.get_sessions()[0]
+        assert session.language_icon == ""
+
 
 class TestClearFinished:
     def test_removes_only_finished(self, status_dir):

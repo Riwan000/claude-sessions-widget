@@ -29,6 +29,16 @@ def make_tray_icon(color=TRAY_COLOR_OK):
     return QIcon(pixmap)
 
 
+def quit_if_idle(app):
+    """Closes the widget once no session status file remains - it exists
+    only to show live Claude Code sessions, so once the last one's
+    SessionEnd hook removes its file there's nothing left to display.
+    Runs off the same poll timer as window.refresh(); QApplication.quit()
+    is a no-op if the app is already quitting."""
+    if not status_store.get_sessions():
+        app.quit()
+
+
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -108,6 +118,7 @@ def main():
 
     timer = QTimer()
     timer.timeout.connect(window.refresh)
+    timer.timeout.connect(lambda: quit_if_idle(app))
     timer.start(POLL_INTERVAL_MS)
 
     sys.exit(app.exec())

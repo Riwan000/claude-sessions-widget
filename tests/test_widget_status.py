@@ -130,6 +130,13 @@ class TestFindStableAncestorPid:
 
 
 class TestHandlers:
+    @pytest.fixture(autouse=True)
+    def no_real_widget_spawn(self, monkeypatch):
+        """handle_session_start now launches the widget process - these
+        tests must not actually spawn it. test_session_start_spawns_widget
+        overrides this patch to assert on calls instead."""
+        monkeypatch.setattr(ws, "spawn_widget", lambda: None)
+
     def read_record(self, status_dir, session_id):
         return json.loads((status_dir / f"{session_id}.json").read_text(encoding="utf-8"))
 
@@ -161,6 +168,14 @@ class TestHandlers:
 
         ws.handle_session_end("s1", "C:/x/proj", {}, 42)
         assert not (status_dir / "s1.json").exists()
+
+    def test_session_start_spawns_widget(self, status_dir, monkeypatch):
+        calls = []
+        monkeypatch.setattr(ws, "spawn_widget", lambda: calls.append(True))
+
+        ws.handle_session_start("s1", "C:/x/proj", {}, 42)
+
+        assert calls == [True]
 
     def test_stop_without_offset_skips_tokens(self, status_dir, tmp_path):
         # Resumed session: Stop fires but prompt-submit never recorded an
@@ -201,6 +216,191 @@ class TestHandlers:
         ws.handle_session_start("s4", "C:/x/proj", {}, 42)
         ws.handle_notification("s4", "C:/x/proj", {"message": "Claude is waiting for input"}, 42)
         assert self.read_record(status_dir, "s4")["status"] == "idle"
+
+    def test_tool_start_records_read_of_named_file(self, status_dir):
+        ws.handle_session_start("s5", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s5", "C:/x/proj",
+            {"tool_name": "Read", "tool_input": {"file_path": "C:/x/proj/README.md"}},
+            42,
+        )
+        record = self.read_record(status_dir, "s5")
+        assert record["currentTool"] == "Read"
+        assert record["currentToolDetail"] == "Reading README.md"
+        assert record["status"] == "running"
+
+    def test_tool_start_records_edit_of_named_file(self, status_dir):
+        ws.handle_session_start("s6", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s6", "C:/x/proj",
+            {"tool_name": "Edit", "tool_input": {"file_path": "C:/x/proj/app.py"}},
+            42,
+        )
+        assert self.read_record(status_dir, "s6")["currentToolDetail"] == "Editing app.py"
+
+    def test_tool_start_records_bash_command(self, status_dir):
+        ws.handle_session_start("s7", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s7", "C:/x/proj",
+            {"tool_name": "Bash", "tool_input": {"command": "pytest tests/"}},
+            42,
+        )
+        assert self.read_record(status_dir, "s7")["currentToolDetail"] == "Running pytest tests/"
+
+    def test_tool_start_unknown_tool_uses_generic_fallback(self, status_dir):
+        ws.handle_session_start("s8", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s8", "C:/x/proj", {"tool_name": "SomeFutureTool", "tool_input": {}}, 42
+        )
+        assert self.read_record(status_dir, "s8")["currentToolDetail"] == "Using SomeFutureTool"
+
+    def test_stop_clears_current_tool(self, status_dir):
+        ws.handle_session_start("s9", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s9", "C:/x/proj", {"tool_name": "Read", "tool_input": {"file_path": "a.py"}}, 42
+        )
+        ws.handle_stop("s9", "C:/x/proj", {}, 42)
+        record = self.read_record(status_dir, "s9")
+        assert record["currentTool"] == ""
+        assert record["currentToolDetail"] == ""
+
+    def test_prompt_submit_clears_stale_tool_from_previous_turn(self, status_dir):
+        ws.handle_session_start("s10", "C:/x/proj", {}, 42)
+        ws.handle_tool_start(
+            "s10", "C:/x/proj", {"tool_name": "Bash", "tool_input": {"command": "pytest"}}, 42
+        )
+        ws.handle_prompt_submit("s10", "C:/x/proj", {"prompt": "next task"}, 42)
+        assert self.read_record(status_dir, "s10")["currentToolDetail"] == ""
+
+    def test_session_start_records_language_icon(self, status_dir, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("", encoding="utf-8")
+
+        ws.handle_session_start("s11", str(project), {}, 42)
+
+        assert self.read_record(status_dir, "s11")["languageIcon"] == "🐍"
+
+    def test_session_start_keeps_cached_language_icon_on_resume(self, status_dir, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("", encoding="utf-8")
+
+        ws.handle_session_start("s12", str(project), {}, 42)
+        (project / "package.json").write_text("", encoding="utf-8")
+        ws.handle_session_start("s12", str(project), {}, 42)
+
+        # Cached at first SessionStart - a later marker file appearing (or a
+        # second SessionStart on a resumed session) must not flip it.
+        assert self.read_record(status_dir, "s12")["languageIcon"] == "🐍"
+
+    def test_session_start_unknown_project_has_no_language_icon(self, status_dir, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        ws.handle_session_start("s13", str(project), {}, 42)
+
+        assert self.read_record(status_dir, "s13")["languageIcon"] == ""
+
+
+class TestDescribeToolUse:
+    def test_read_without_file_path_uses_generic_phrase(self):
+        assert ws.describe_tool_use("Read", {}) == "Reading a file"
+
+    def test_bash_without_command_uses_generic_phrase(self):
+        assert ws.describe_tool_use("Bash", {}) == "Running a command"
+
+    def test_grep_includes_pattern(self):
+        assert ws.describe_tool_use("Grep", {"pattern": "TODO"}) == "Searching for TODO"
+
+    def test_non_dict_tool_input_does_not_raise(self):
+        assert ws.describe_tool_use("Read", None) == "Reading a file"
+
+    def test_empty_tool_name_uses_generic_working_label(self):
+        assert ws.describe_tool_use("", {}) == "Working"
+
+
+class TestDetectLanguageIcon:
+    def test_pyproject_toml_is_python(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "🐍"
+
+    def test_requirements_txt_is_python(self, tmp_path):
+        (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "🐍"
+
+    def test_loose_py_file_is_python(self, tmp_path):
+        (tmp_path / "app.py").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "🐍"
+
+    def test_package_json_is_node(self, tmp_path):
+        (tmp_path / "package.json").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "📦"
+
+    def test_cargo_toml_is_rust(self, tmp_path):
+        (tmp_path / "Cargo.toml").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "🦀"
+
+    def test_go_mod_is_go(self, tmp_path):
+        (tmp_path / "go.mod").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == "🐹"
+
+    def test_no_markers_returns_empty(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+        assert ws.detect_language_icon(tmp_path) == ""
+
+    def test_missing_directory_returns_empty(self, tmp_path):
+        assert ws.detect_language_icon(tmp_path / "does-not-exist") == ""
+
+
+class TestSpawnWidget:
+    def test_launches_pythonw_with_app_path(self, tmp_path, monkeypatch):
+        pythonw = tmp_path / "pythonw.exe"
+        pythonw.write_text("", encoding="utf-8")
+        app_script = tmp_path / "app.py"
+        app_script.write_text("", encoding="utf-8")
+        monkeypatch.setattr(ws, "WIDGET_PYTHONW", pythonw)
+        monkeypatch.setattr(ws, "WIDGET_APP", app_script)
+
+        calls = []
+        monkeypatch.setattr(
+            ws.subprocess, "Popen", lambda args, **kwargs: calls.append((args, kwargs))
+        )
+
+        ws.spawn_widget()
+
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert args == [str(pythonw), str(app_script)]
+        assert kwargs["creationflags"] & ws.subprocess.DETACHED_PROCESS
+
+    def test_missing_pythonw_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ws, "WIDGET_PYTHONW", tmp_path / "missing-pythonw.exe")
+        monkeypatch.setattr(ws, "WIDGET_APP", tmp_path / "app.py")
+
+        calls = []
+        monkeypatch.setattr(
+            ws.subprocess, "Popen", lambda *a, **k: calls.append((a, k))
+        )
+
+        ws.spawn_widget()
+
+        assert calls == []
+
+    def test_missing_app_script_is_noop(self, tmp_path, monkeypatch):
+        pythonw = tmp_path / "pythonw.exe"
+        pythonw.write_text("", encoding="utf-8")
+        monkeypatch.setattr(ws, "WIDGET_PYTHONW", pythonw)
+        monkeypatch.setattr(ws, "WIDGET_APP", tmp_path / "missing-app.py")
+
+        calls = []
+        monkeypatch.setattr(
+            ws.subprocess, "Popen", lambda *a, **k: calls.append((a, k))
+        )
+
+        ws.spawn_widget()
+
+        assert calls == []
 
 
 class TestHelpers:

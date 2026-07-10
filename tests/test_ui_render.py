@@ -138,6 +138,81 @@ class TestMainWindowRendering:
         assert window.height() > height_one
 
 
+class TestCollapse:
+    def test_starts_expanded_by_default(self, status_dir, make_window):
+        window = make_window()
+        assert window._collapsed is False
+        assert window.scroll_area.isVisibleTo(window)
+        assert window.collapse_button.text() == "▾"
+
+    def test_collapse_hides_list_and_shrinks_height(self, status_dir, make_window):
+        write_session(status_dir, "one", "running")
+        write_session(status_dir, "two", "running")
+        window = make_window()
+        window.show()
+        QApplication.processEvents()
+        window._fit_height_to_content()
+        expanded_height = window.height()
+
+        window.set_collapsed(True)
+        QApplication.processEvents()
+
+        assert window._collapsed is True
+        assert not window.scroll_area.isVisibleTo(window)
+        assert window.collapse_button.text() == "▸"
+        assert window.height() < expanded_height
+
+    def test_expand_restores_list_and_height(self, status_dir, make_window):
+        write_session(status_dir, "one", "running")
+        window = make_window()
+        window.show()
+        QApplication.processEvents()
+        window._fit_height_to_content()
+        expanded_height = window.height()
+
+        window.set_collapsed(True)
+        QApplication.processEvents()
+        window.set_collapsed(False)
+        QApplication.processEvents()
+
+        assert window._collapsed is False
+        assert window.scroll_area.isVisibleTo(window)
+        assert window.height() == expanded_height
+
+    def test_collapse_button_click_toggles_state(self, status_dir, make_window):
+        window = make_window()
+        window.show()
+        QApplication.processEvents()
+
+        window.collapse_button.click()
+        assert window._collapsed is True
+
+        window.collapse_button.click()
+        assert window._collapsed is False
+
+    def test_collapsed_state_persists_across_restart(self, status_dir, make_window):
+        window = make_window()
+        window.show()
+        QApplication.processEvents()
+        window.set_collapsed(True)
+        window._persist_geometry()
+
+        window2 = make_window()
+        assert window2._collapsed is True
+        assert not window2.scroll_area.isVisibleTo(window2)
+
+    def test_refresh_keeps_working_while_collapsed(self, status_dir, make_window):
+        window = make_window()
+        window.set_collapsed(True)
+
+        write_session(status_dir, "alpha", "permission", alert="needs approval")
+        window.refresh()
+        QApplication.processEvents()
+
+        assert "alpha" in window._rows
+        assert "needs permission" in window.count_label.text()
+
+
 class TestPermissionState:
     def test_signal_tracks_permission_sessions(self, status_dir, make_window):
         write_session(status_dir, "alpha", "running")
@@ -187,6 +262,125 @@ class TestPermissionState:
         row.deleteLater()
 
 
+class TestCurrentToolDisplay:
+    def test_tool_detail_overrides_task_text(self, qapp):
+        from ui.session_row import SessionRow
+
+        session = make_session(task="do the thing", current_tool_detail="Reading README.md")
+        row = SessionRow(session)
+        row.resize(400, 48)
+        row.show()
+        QApplication.processEvents()
+
+        assert row.task_label.text() == "Reading README.md"
+        row.deleteLater()
+
+    def test_permission_alert_still_wins_over_tool_detail(self, qapp):
+        from ui.session_row import SessionRow
+
+        session = make_session(
+            status="permission",
+            display_status="permission",
+            alert="Claude needs your permission to run Bash",
+            current_tool_detail="Running rm -rf /",
+        )
+        row = SessionRow(session)
+        row.resize(400, 48)
+        row.show()
+        QApplication.processEvents()
+
+        assert row.task_label.text().startswith("Claude needs your permission")
+        row.deleteLater()
+
+    def test_no_tool_detail_falls_back_to_task(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(task="plain task"))
+        row.resize(400, 48)
+        row.show()
+        QApplication.processEvents()
+
+        assert row.task_label.text() == "plain task"
+        row.deleteLater()
+
+
+class TestPersonalityDisplay:
+    def test_running_with_no_tool_yet_shows_thinking(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(status="running", display_status="running"))
+        assert row.personality_label.text() == "🧠 Thinking"
+        row.deleteLater()
+
+    def test_running_with_edit_tool_shows_editing(self, qapp):
+        from ui.session_row import SessionRow
+
+        session = make_session(
+            status="running", display_status="running", current_tool="Edit"
+        )
+        row = SessionRow(session)
+        assert row.personality_label.text() == "✏️ Editing"
+        row.deleteLater()
+
+    def test_unknown_tool_falls_back_to_working(self, qapp):
+        from ui.session_row import SessionRow
+
+        session = make_session(
+            status="running", display_status="running", current_tool="SomeFutureTool"
+        )
+        row = SessionRow(session)
+        assert row.personality_label.text() == "🔧 Working"
+        row.deleteLater()
+
+    def test_idle_shows_idle_tag(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(status="idle", display_status="idle"))
+        assert row.personality_label.text() == "💤 Idle"
+        row.deleteLater()
+
+    def test_finished_shows_done_tag(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(status="finished", display_status="finished"))
+        assert row.personality_label.text() == "✅ Done"
+        row.deleteLater()
+
+    def test_permission_shows_no_personality_tag(self, qapp):
+        from ui.session_row import SessionRow
+
+        session = make_session(
+            status="permission",
+            display_status="permission",
+            alert="Claude needs your permission to run Bash",
+            current_tool="Bash",
+        )
+        row = SessionRow(session)
+        assert row.personality_label.text() == ""
+        row.deleteLater()
+
+    def test_stale_shows_no_personality_tag(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(status="running", display_status="stale"))
+        assert row.personality_label.text() == ""
+        row.deleteLater()
+
+    def test_project_label_prefixed_with_language_icon(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(project="widget", language_icon="🐍"))
+        assert row.project_label.text() == "🐍 widget"
+        row.deleteLater()
+
+    def test_project_label_plain_when_no_language_icon(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(project="widget"))
+        assert row.project_label.text() == "widget"
+        row.deleteLater()
+
+
 class TestTaskElision:
     LONG_TASK = "implement the extremely long task description that cannot possibly fit " * 3
 
@@ -207,6 +401,40 @@ class TestTaskElision:
         wide_text = row.task_label.text()
         assert len(wide_text) > len(narrow_text)
         row.deleteLater()
+
+
+class TestQuitIfIdle:
+    def test_quits_when_no_sessions_remain(self, status_dir):
+        import app as app_module
+
+        class FakeApp:
+            def __init__(self):
+                self.quit_called = False
+
+            def quit(self):
+                self.quit_called = True
+
+        fake_app = FakeApp()
+        app_module.quit_if_idle(fake_app)
+
+        assert fake_app.quit_called is True
+
+    def test_does_not_quit_while_sessions_remain(self, status_dir):
+        import app as app_module
+
+        write_session(status_dir, "alpha", "running")
+
+        class FakeApp:
+            def __init__(self):
+                self.quit_called = False
+
+            def quit(self):
+                self.quit_called = True
+
+        fake_app = FakeApp()
+        app_module.quit_if_idle(fake_app)
+
+        assert fake_app.quit_called is False
 
 
 class TestTrayIcon:

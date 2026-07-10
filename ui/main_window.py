@@ -86,8 +86,10 @@ class MainWindow(QWidget):
 
         self._rows = {}
         self._blink_on = False
+        self._collapsed = bool(geometry.get("collapsed", False))
         self._build_ui()
         self.setStyleSheet(STYLE_PATH.read_text(encoding="utf-8"))
+        self._apply_collapsed_state()
 
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_blink)
@@ -130,6 +132,14 @@ class MainWindow(QWidget):
 
         header_layout.addStretch(1)
 
+        collapse_button = QPushButton("▾")
+        collapse_button.setObjectName("collapseButton")
+        collapse_button.setFixedSize(22, 22)
+        collapse_button.setCursor(Qt.PointingHandCursor)
+        collapse_button.clicked.connect(self._on_collapse_clicked)
+        self.collapse_button = collapse_button
+        header_layout.addWidget(collapse_button)
+
         hide_button = QPushButton("–")
         hide_button.setObjectName("hideButton")
         hide_button.setFixedSize(22, 22)
@@ -160,6 +170,20 @@ class MainWindow(QWidget):
     def _on_hide_clicked(self):
         self.hide()
         self.hidden_to_tray.emit()
+
+    def _on_collapse_clicked(self):
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed):
+        self._collapsed = collapsed
+        self._apply_collapsed_state()
+        self._fit_height_to_content()
+        self._geometry_save_timer.start(GEOMETRY_SAVE_DEBOUNCE_MS)
+
+    def _apply_collapsed_state(self):
+        self.scroll_area.setVisible(not self._collapsed)
+        self.collapse_button.setText("▸" if self._collapsed else "▾")
+        self.collapse_button.setToolTip("Expand" if self._collapsed else "Collapse")
 
     def _on_row_clicked(self, session):
         if not FOCUS_SCRIPT_PATH.exists() or not session.shell_pid:
@@ -239,17 +263,15 @@ class MainWindow(QWidget):
     def _fit_height_to_content(self):
         self.list_layout.invalidate()
         self.list_layout.activate()
-        content_height = self.list_layout.sizeHint().height()
         margins = self._root_layout.contentsMargins()
-        chrome_height = (
-            self._header.sizeHint().height()
-            + self._root_layout.spacing()
-            + margins.top()
-            + margins.bottom()
-        )
+        header_height = self._header.sizeHint().height() + margins.top() + margins.bottom()
 
-        target_height = chrome_height + content_height
-        target_height = max(MIN_WINDOW_HEIGHT, min(target_height, self._max_window_height()))
+        if self._collapsed:
+            target_height = header_height
+        else:
+            content_height = self.list_layout.sizeHint().height()
+            target_height = header_height + self._root_layout.spacing() + content_height
+            target_height = max(MIN_WINDOW_HEIGHT, min(target_height, self._max_window_height()))
 
         current = self.geometry()
         if target_height != current.height():
@@ -281,5 +303,11 @@ class MainWindow(QWidget):
     def _persist_geometry(self):
         geo = self.geometry()
         save_window_geometry(
-            {"x": geo.x(), "y": geo.y(), "width": geo.width(), "height": geo.height()}
+            {
+                "x": geo.x(),
+                "y": geo.y(),
+                "width": geo.width(),
+                "height": geo.height(),
+                "collapsed": self._collapsed,
+            }
         )

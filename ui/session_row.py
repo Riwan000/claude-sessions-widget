@@ -14,8 +14,44 @@ STATUS_LABELS = {
     "permission": "needs permission",
 }
 
+# Icon + verb shown next to the project name while a tool is active, inferred
+# from the last PreToolUse call. Unrecognized tools (custom/MCP) fall back to
+# a generic "Working" rather than showing nothing.
+TOOL_PERSONALITY = {
+    "Read": ("📖", "Reading"),
+    "NotebookEdit": ("📖", "Reading"),
+    "Edit": ("✏️", "Editing"),
+    "Write": ("✏️", "Editing"),
+    "Bash": ("⚡", "Running"),
+    "Grep": ("🔍", "Searching"),
+    "Glob": ("🔍", "Searching"),
+    "WebFetch": ("🔍", "Searching"),
+    "WebSearch": ("🔍", "Searching"),
+    "TodoWrite": ("📝", "Planning"),
+    "Task": ("🤖", "Delegating"),
+}
+TOOL_PERSONALITY_FALLBACK = ("🔧", "Working")
+
+# Shown when a session has no active tool call. permission/stale are
+# deliberately absent here - they already have their own dedicated visual
+# treatment (blinking alert / "possibly closed" status word) and a
+# personality tag would just be redundant noise on top of that.
+STATUS_PERSONALITY = {
+    "idle": ("💤", "Idle"),
+    "running": ("🧠", "Thinking"),
+    "finished": ("✅", "Done"),
+}
+
 TASK_ELIDE_MIN_WIDTH = 80
 TASK_ELIDE_PADDING = 4
+
+
+def _personality_text(session):
+    if session.display_status == "running" and session.current_tool:
+        icon, verb = TOOL_PERSONALITY.get(session.current_tool, TOOL_PERSONALITY_FALLBACK)
+        return f"{icon} {verb}"
+    entry = STATUS_PERSONALITY.get(session.display_status)
+    return f"{entry[0]} {entry[1]}" if entry else ""
 
 
 def _apply_property(widget, name, value):
@@ -59,6 +95,10 @@ class SessionRow(QFrame):
         self.project_label.setObjectName("projectLabel")
         header.addWidget(self.project_label)
 
+        self.personality_label = QLabel()
+        self.personality_label.setObjectName("personalityLabel")
+        header.addWidget(self.personality_label)
+
         header.addStretch(1)
 
         self.token_label = QLabel()
@@ -87,10 +127,14 @@ class SessionRow(QFrame):
         for widget in (self.accent_bar, self.status_dot):
             _apply_property(widget, "blink", "off")
 
-        self.project_label.setText(session.project)
+        project_text = f"{session.language_icon} {session.project}" if session.language_icon else session.project
+        self.project_label.setText(project_text)
+        self.personality_label.setText(_personality_text(session))
 
         if session.display_status == "permission" and session.alert:
             self._task_text = session.alert
+        elif session.current_tool_detail:
+            self._task_text = session.current_tool_detail
         else:
             self._task_text = session.task or STATUS_LABELS.get(session.display_status, "")
         self._apply_task_elide()

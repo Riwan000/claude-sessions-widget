@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 """Claude Code hook: reports session status to the widget.
 
-Invoked by Claude Code hooks (SessionStart, UserPromptSubmit, Stop,
-SessionEnd, Notification, PostToolUse) with the event name as argv[1] and
-the hook JSON payload on stdin. Writes one status file per session to
+Invoked by Claude Code hooks (SessionStart, UserPromptSubmit, PreToolUse,
+Stop, SessionEnd, Notification, PostToolUse) with the event name as argv[1]
+and the hook JSON payload on stdin. Writes one status file per session to
 STATUS_DIR so the desktop widget can render live project/task/status
-(including a blinking "needs permission" state) across every open Claude
-Code CLI.
+(including a blinking "needs permission" state, the current tool call,
+e.g. "Editing app.py", and a one-time-per-session language icon guess,
+e.g. 🐍) across every open Claude Code CLI.
 
 Must never raise or block: any failure here should be invisible to
 Claude Code, so everything runs inside a top-level try/except and the
@@ -17,6 +18,7 @@ import ctypes
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from ctypes import wintypes
@@ -28,6 +30,10 @@ MAX_TASK_CHARS = 200
 MAX_ANCESTOR_DEPTH = 12
 
 TH32CS_SNAPPROCESS = 0x00000002
+
+WIDGET_DIR = Path(__file__).resolve().parent.parent
+WIDGET_PYTHONW = WIDGET_DIR / ".venv" / "Scripts" / "pythonw.exe"
+WIDGET_APP = WIDGET_DIR / "app.py"
 
 
 class _PROCESSENTRY32(ctypes.Structure):
@@ -128,6 +134,76 @@ def truncate(text, limit=MAX_TASK_CHARS):
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def describe_tool_use(tool_name, tool_input):
+    """One human-readable line for what a tool call is about to do, e.g.
+    'Reading README.md' or 'Running pytest tests/'. Falls back to a generic
+    'Using <ToolName>' for tools not called out below (custom/MCP tools),
+    so the widget never shows a blank line for a running tool."""
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+
+    def file_name(key="file_path"):
+        path = tool_input.get(key)
+        return Path(str(path)).name if path else ""
+
+    if tool_name in ("Read", "NotebookEdit"):
+        name = file_name()
+        return f"Reading {name}" if name else "Reading a file"
+    if tool_name == "Edit":
+        name = file_name()
+        return f"Editing {name}" if name else "Editing a file"
+    if tool_name == "Write":
+        name = file_name()
+        return f"Writing {name}" if name else "Writing a file"
+    if tool_name == "Bash":
+        command = str(tool_input.get("command") or "").strip()
+        return f"Running {command}" if command else "Running a command"
+    if tool_name == "Grep":
+        pattern = tool_input.get("pattern")
+        return f"Searching for {pattern}" if pattern else "Searching code"
+    if tool_name == "Glob":
+        pattern = tool_input.get("pattern")
+        return f"Finding {pattern}" if pattern else "Finding files"
+    if tool_name == "WebFetch":
+        url = tool_input.get("url")
+        return f"Fetching {url}" if url else "Fetching a page"
+    if tool_name == "WebSearch":
+        query = tool_input.get("query")
+        return f"Searching {query}" if query else "Searching the web"
+    if tool_name == "TodoWrite":
+        return "Updating task list"
+    if tool_name == "Task":
+        description = tool_input.get("description")
+        return f"Delegating: {description}" if description else "Delegating to a subagent"
+    return f"Using {tool_name}" if tool_name else "Working"
+
+
+LANGUAGE_MARKERS = (
+    ("go.mod", "🐹"),
+    ("Cargo.toml", "🦀"),
+    ("package.json", "📦"),
+    ("pyproject.toml", "🐍"),
+    ("requirements.txt", "🐍"),
+    ("setup.py", "🐍"),
+)
+
+
+def detect_language_icon(cwd):
+    """Best-effort, one-time-per-session language guess from top-level marker
+    files in the project directory, so the widget can show e.g. '🐍 widget'
+    instead of a plain project name. Never raises; unknown/unreadable
+    directories just get no icon."""
+    try:
+        names = {entry.name for entry in Path(cwd).iterdir()}
+    except OSError:
+        return ""
+    for marker, icon in LANGUAGE_MARKERS:
+        if marker in names:
+            return icon
+    if any(name.endswith(".py") for name in names):
+        return "🐍"
+    return ""
+
+
 def transcript_size(transcript_path):
     """Byte offset marking 'end of transcript so far' - used as a checkpoint
     so a later Stop event can sum only the lines written during this turn."""
@@ -203,10 +279,30 @@ def load_or_create(session_id, cwd, now, shell_pid):
     return path, record
 
 
+def spawn_widget():
+    """Launches the widget UI, detached from this hook's process tree so it
+    outlives the hook (which Claude Code kills shortly after it returns).
+    Safe to call on every SessionStart even if the widget is already
+    running: its own single-instance lock (app.py) makes a redundant launch
+    a harmless no-op."""
+    if not WIDGET_PYTHONW.exists() or not WIDGET_APP.exists():
+        return
+    subprocess.Popen(
+        [str(WIDGET_PYTHONW), str(WIDGET_APP)],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+
+
 def handle_session_start(session_id, cwd, payload, shell_pid):
     path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
     record["pid"] = os.getpid()
+    # Sniffed once and cached rather than every poll cycle, since it's a
+    # filesystem listdir and the answer can't change during a session.
+    if "languageIcon" not in record:
+        record["languageIcon"] = detect_language_icon(cwd)
     atomic_write(path, record)
+    spawn_widget()
 
 
 def handle_prompt_submit(session_id, cwd, payload, shell_pid):
@@ -214,8 +310,21 @@ def handle_prompt_submit(session_id, cwd, payload, shell_pid):
     prompt = payload.get("prompt") or payload.get("message") or ""
     record["task"] = truncate(prompt)
     record["status"] = "running"
+    # A new turn is starting - drop the previous turn's tool line so it
+    # doesn't linger over the new task text until the first tool call.
+    record["currentTool"] = ""
+    record["currentToolDetail"] = ""
     record["transcriptPath"] = payload.get("transcript_path") or record.get("transcriptPath")
     record["transcriptOffset"] = transcript_size(record["transcriptPath"])
+    atomic_write(path, record)
+
+
+def handle_tool_start(session_id, cwd, payload, shell_pid):
+    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
+    tool_name = payload.get("tool_name") or ""
+    record["status"] = "running"
+    record["currentTool"] = tool_name
+    record["currentToolDetail"] = truncate(describe_tool_use(tool_name, payload.get("tool_input")))
     atomic_write(path, record)
 
 
@@ -230,6 +339,8 @@ def handle_stop(session_id, cwd, payload, shell_pid):
         record["tokens"] = tokens
 
     record["status"] = "finished"
+    record["currentTool"] = ""
+    record["currentToolDetail"] = ""
     atomic_write(path, record)
 
 
@@ -267,6 +378,7 @@ def handle_tool_complete(session_id, cwd, payload, shell_pid):
 HANDLERS = {
     "session-start": handle_session_start,
     "prompt-submit": handle_prompt_submit,
+    "tool-start": handle_tool_start,
     "stop": handle_stop,
     "session-end": handle_session_end,
     "notification": handle_notification,
