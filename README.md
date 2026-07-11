@@ -13,6 +13,10 @@ running on this machine: project (folder name), current task, and whether it's
 running, idle, finished, possibly closed, or waiting on your permission. The
 window height grows and shrinks automatically with the number of sessions.
 
+![Claude Sessions Widget showing a permission alert, running/idle/finished sessions, and the token-tier pill colors](docs/screenshot.png)
+
+*(Rendered from synthetic demo data for illustration — not a real session.)*
+
 ## How it works
 
 1. Seven hooks are wired into the **global** `~/.claude/settings.json`
