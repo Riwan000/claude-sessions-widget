@@ -1,5 +1,13 @@
 # Claude Sessions Widget
 
+**Windows only** — the click-to-focus and autostart features are built on
+Win32 APIs (`winreg`, `AttachThreadInput`/`SetForegroundWindow` via
+`focus_session.ps1`) with no cross-platform equivalent implemented.
+
+> Unofficial, community-built tool. Not affiliated with, endorsed by, or
+> supported by Anthropic. "Claude" and "Claude Code" are Anthropic's
+> trademarks, used here only to describe compatibility.
+
 An always-on-top desktop widget that shows, live, every Claude Code CLI session
 running on this machine: project (folder name), current task, and whether it's
 running, idle, finished, possibly closed, or waiting on your permission. The
@@ -17,8 +25,9 @@ window height grows and shrinks automatically with the number of sessions.
      directory (`pyproject.toml`/`requirements.txt`/`setup.py`/any `*.py`
      → 🐍, `package.json` → 📦, `Cargo.toml` → 🦀, `go.mod` → 🐹). Cached on
      first write and never recomputed, so it can't flicker mid-session —
-     see `detect_language_icon()`. Shown as a prefix on the project name
-     (e.g. "🐍 widget").
+     see `detect_language_icon()`. Recorded in the status file but not
+     currently rendered in the UI (the project name is shown plain); kept
+     around for tooling/future use.
    - `UserPromptSubmit` → `status: "running"`, `task` = the prompt text, and
      clears any leftover tool line from the previous turn.
    - `PreToolUse` (a tool is about to run) → `currentTool` = the tool name,
@@ -77,6 +86,18 @@ window height grows and shrinks automatically with the number of sessions.
    if you hover it; only the input+output total is shown inline (e.g. "30k
    tok"). If no transcript path is available, the token badge is just omitted
    for that row — this never blocks or errors.
+6. **Token pill colors**: the token badge's background tints as a session's
+   per-turn total climbs — grey by default, yellow past 100k, orange past
+   150k, red past 200k (see `token_tier()` in `status_store.py`). The first
+   time a session crosses 150k, a one-time tray notification fires
+   suggesting you start a fresh session (large contexts get slower and more
+   expensive); it won't repeat for that session even if the total keeps
+   climbing, and it resets if the session disappears and a new one reuses
+   the slot.
+7. **`cd` commands are shortened** in the task line to just the target
+   folder (e.g. `cd "C:/long/path/to/widget" && pytest` → `cd widget/ &&
+   pytest`) — see `_shorten_cd_command()` in `hooks/widget_status.py`. Long
+   absolute paths otherwise dominate the line with no useful signal.
 
 ## Setup
 
@@ -97,6 +118,7 @@ venv is rebuilt).
 ## Tests
 
 ```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest tests/
 ```
 

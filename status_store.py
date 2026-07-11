@@ -12,6 +12,13 @@ PRUNE_AFTER_SECONDS = 24 * 60 * 60
 ACTIVE_STATUSES = {"idle", "running", "permission"}
 STATUS_RANK = {"permission": 0, "running": 1, "idle": 1}
 
+# Token-pill color tiers. TOKEN_TIER_HIGH doubles as the one-time "large
+# context" notification threshold in ui/main_window.py, since that's the
+# point a session becomes worth flagging outside the pill color alone.
+TOKEN_TIER_WARN = 100_000
+TOKEN_TIER_HIGH = 150_000
+TOKEN_TIER_CRITICAL = 200_000
+
 
 @dataclass
 class Session:
@@ -125,6 +132,25 @@ def format_tokens(count):
     if count < 1_000_000:
         return f"{round(count / 1000)}k"
     return f"{count / 1_000_000:.1f}M"
+
+
+def format_tokens_precise(count):
+    """One-decimal 'Nk' formatting (e.g. 151300 -> '151.3k'), used for the
+    large-context warning notification where format_tokens()'s whole-k
+    rounding at this scale would lose the precision the message implies."""
+    return f"{count / 1000:.1f}k"
+
+
+def token_tier(total):
+    """Pill color tier for a session's token total: '' (grey, default),
+    'warn' (yellow), 'high' (orange), or 'critical' (red)."""
+    if total >= TOKEN_TIER_CRITICAL:
+        return "critical"
+    if total >= TOKEN_TIER_HIGH:
+        return "high"
+    if total >= TOKEN_TIER_WARN:
+        return "warn"
+    return ""
 
 
 def format_relative(seconds):

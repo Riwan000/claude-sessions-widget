@@ -131,3 +131,25 @@ class TestFormatting:
         assert status_store.format_relative(120) == "2m ago"
         assert status_store.format_relative(7200) == "2h ago"
         assert status_store.format_relative(180000) == "2d ago"
+
+    def test_format_tokens_precise(self):
+        assert status_store.format_tokens_precise(151_300) == "151.3k"
+        assert status_store.format_tokens_precise(200_000) == "200.0k"
+
+
+class TestTokenTier:
+    def test_below_warn_threshold_is_default_grey(self):
+        assert status_store.token_tier(0) == ""
+        assert status_store.token_tier(99_999) == ""
+
+    def test_warn_tier_at_100k(self):
+        assert status_store.token_tier(100_000) == "warn"
+        assert status_store.token_tier(149_999) == "warn"
+
+    def test_high_tier_at_150k(self):
+        assert status_store.token_tier(150_000) == "high"
+        assert status_store.token_tier(199_999) == "high"
+
+    def test_critical_tier_at_200k(self):
+        assert status_store.token_tier(200_000) == "critical"
+        assert status_store.token_tier(500_000) == "critical"

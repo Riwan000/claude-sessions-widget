@@ -366,11 +366,11 @@ class TestPersonalityDisplay:
         assert row.personality_label.text() == ""
         row.deleteLater()
 
-    def test_project_label_prefixed_with_language_icon(self, qapp):
+    def test_project_label_ignores_language_icon(self, qapp):
         from ui.session_row import SessionRow
 
         row = SessionRow(make_session(project="widget", language_icon="🐍"))
-        assert row.project_label.text() == "🐍 widget"
+        assert row.project_label.text() == "widget"
         row.deleteLater()
 
     def test_project_label_plain_when_no_language_icon(self, qapp):
@@ -379,6 +379,97 @@ class TestPersonalityDisplay:
         row = SessionRow(make_session(project="widget"))
         assert row.project_label.text() == "widget"
         row.deleteLater()
+
+
+class TestTokenPill:
+    def test_no_tokens_hides_pill(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session())
+        assert row.token_label.isVisibleTo(row) is False
+        row.deleteLater()
+
+    def test_below_warn_threshold_has_default_tier(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tokens_in=1000, tokens_out=500))
+        assert row.token_label.property("tokenTier") == ""
+        row.deleteLater()
+
+    def test_warn_tier_at_100k(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tokens_in=100_000, tokens_out=0))
+        assert row.token_label.property("tokenTier") == "warn"
+        row.deleteLater()
+
+    def test_high_tier_at_150k(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tokens_in=150_000, tokens_out=0))
+        assert row.token_label.property("tokenTier") == "high"
+        row.deleteLater()
+
+    def test_critical_tier_at_200k(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tokens_in=200_000, tokens_out=0))
+        assert row.token_label.property("tokenTier") == "critical"
+        row.deleteLater()
+
+
+class TestTokenWarningNotification:
+    def test_fires_once_when_session_crosses_threshold(self, status_dir, make_window):
+        write_session(status_dir, "alpha", "running", project="example-project",
+                      tokens={"input": 10_000, "output": 0})
+        window = make_window()
+
+        received = []
+        window.token_warning.connect(lambda project, total: received.append((project, total)))
+
+        write_session(status_dir, "alpha", "running", project="example-project",
+                      tokens={"input": 151_300, "output": 0})
+        window.refresh()
+
+        assert received == [("example-project", 151_300)]
+
+    def test_does_not_refire_on_subsequent_refreshes(self, status_dir, make_window):
+        write_session(status_dir, "alpha", "running",
+                       tokens={"input": 10_000, "output": 0})
+        window = make_window()
+
+        received = []
+        window.token_warning.connect(lambda project, total: received.append((project, total)))
+
+        write_session(status_dir, "alpha", "running",
+                       tokens={"input": 151_300, "output": 0})
+        window.refresh()
+        window.refresh()
+        window.refresh()
+
+        assert len(received) == 1
+
+    def test_does_not_fire_below_threshold(self, status_dir, make_window):
+        write_session(status_dir, "alpha", "running",
+                       tokens={"input": 10_000, "output": 0})
+        window = make_window()
+
+        received = []
+        window.token_warning.connect(lambda project, total: received.append((project, total)))
+        window.refresh()
+
+        assert received == []
+
+    def test_forgets_session_once_it_disappears(self, status_dir, make_window):
+        write_session(status_dir, "alpha", "running",
+                       tokens={"input": 151_300, "output": 0})
+        window = make_window()
+        assert "alpha" in window._token_warned
+
+        (status_dir / "alpha.json").unlink()
+        window.refresh()
+
+        assert "alpha" not in window._token_warned
 
 
 class TestTaskElision:

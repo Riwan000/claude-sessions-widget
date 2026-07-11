@@ -127,8 +127,7 @@ class SessionRow(QFrame):
         for widget in (self.accent_bar, self.status_dot):
             _apply_property(widget, "blink", "off")
 
-        project_text = f"{session.language_icon} {session.project}" if session.language_icon else session.project
-        self.project_label.setText(project_text)
+        self.project_label.setText(session.project)
         self.personality_label.setText(_personality_text(session))
 
         if session.display_status == "permission" and session.alert:
@@ -152,8 +151,10 @@ class SessionRow(QFrame):
         if session.has_tokens:
             total = session.tokens_in + session.tokens_out
             self.token_label.setText(f"{status_store.format_tokens(total)} tok")
+            _apply_property(self.token_label, "tokenTier", status_store.token_tier(total))
         else:
             self.token_label.setText("")
+        self.token_label.setVisible(session.has_tokens)
 
         self.time_label.setText(status_store.format_relative(session.age_seconds))
 

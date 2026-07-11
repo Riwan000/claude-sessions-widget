@@ -310,6 +310,17 @@ class TestDescribeToolUse:
     def test_bash_without_command_uses_generic_phrase(self):
         assert ws.describe_tool_use("Bash", {}) == "Running a command"
 
+    def test_bash_cd_shortens_to_folder_name(self):
+        command = 'cd "C:/Users/dev/Desktop/Claude_space/widget"'
+        assert ws.describe_tool_use("Bash", {"command": command}) == "cd widget/"
+
+    def test_bash_cd_unquoted_shortens_to_folder_name(self):
+        assert ws.describe_tool_use("Bash", {"command": "cd widget"}) == "cd widget/"
+
+    def test_bash_cd_chained_keeps_remaining_command(self):
+        command = 'cd "C:/Users/dev/Desktop/widget" && pytest tests/'
+        assert ws.describe_tool_use("Bash", {"command": command}) == "cd widget/ && pytest tests/"
+
     def test_grep_includes_pattern(self):
         assert ws.describe_tool_use("Grep", {"pattern": "TODO"}) == "Searching for TODO"
 

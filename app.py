@@ -79,6 +79,19 @@ def main():
 
     window.permission_state_changed.connect(sync_tray_icon)
 
+    def show_token_warning(project, total):
+        formatted = status_store.format_tokens_precise(total)
+        tray.showMessage(
+            "Claude Sessions",
+            f"{project} has exceeded 150k tokens ({formatted}).\n\n"
+            "Large contexts can become slower and more expensive. "
+            "Consider starting a new Claude session.",
+            QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    window.token_warning.connect(show_token_warning)
+
     menu = QMenu()
 
     toggle_action = QAction("Hide")

@@ -134,6 +134,25 @@ def truncate(text, limit=MAX_TASK_CHARS):
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+CD_COMMAND_RE = re.compile(r'^cd\s+("[^"]*"|\'[^\']*\'|\S+)(?:\s*&&\s*(.*))?$', re.IGNORECASE)
+
+
+def _shorten_cd_command(command):
+    """Collapse a 'cd <long/absolute/path>' command down to just the target
+    folder name, e.g. 'cd "C:/Users/.../widget"' -> 'cd widget/'. Long
+    absolute paths otherwise dominate the task line with no useful signal.
+    Returns None for commands that aren't a leading cd, so callers can fall
+    back to the normal 'Running <command>' rendering."""
+    match = CD_COMMAND_RE.match(command)
+    if not match:
+        return None
+    raw_path, rest = match.group(1), match.group(2)
+    path = raw_path.strip("\"'")
+    folder = Path(path.rstrip("/\\")).name or path
+    short = f"cd {folder}/"
+    return f"{short} && {rest}" if rest else short
+
+
 def describe_tool_use(tool_name, tool_input):
     """One human-readable line for what a tool call is about to do, e.g.
     'Reading README.md' or 'Running pytest tests/'. Falls back to a generic
@@ -156,7 +175,9 @@ def describe_tool_use(tool_name, tool_input):
         return f"Writing {name}" if name else "Writing a file"
     if tool_name == "Bash":
         command = str(tool_input.get("command") or "").strip()
-        return f"Running {command}" if command else "Running a command"
+        if not command:
+            return "Running a command"
+        return _shorten_cd_command(command) or f"Running {command}"
     if tool_name == "Grep":
         pattern = tool_input.get("pattern")
         return f"Searching for {pattern}" if pattern else "Searching code"

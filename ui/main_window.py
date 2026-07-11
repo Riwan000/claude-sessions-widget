@@ -73,6 +73,7 @@ class DragHeader(QFrame):
 class MainWindow(QWidget):
     hidden_to_tray = Signal()
     permission_state_changed = Signal(bool)  # True while any session needs permission
+    token_warning = Signal(str, int)  # project, total tokens - fires once per session
 
     def __init__(self):
         super().__init__()
@@ -85,6 +86,7 @@ class MainWindow(QWidget):
         )
 
         self._rows = {}
+        self._token_warned = set()  # session_ids already notified past TOKEN_TIER_HIGH
         self._blink_on = False
         self._collapsed = bool(geometry.get("collapsed", False))
         self._build_ui()
@@ -215,12 +217,14 @@ class MainWindow(QWidget):
                 row.update_session(session)
                 self.list_layout.removeWidget(row)
                 self.list_layout.insertWidget(index, row)
+            self._check_token_warning(session)
 
         for session_id in list(self._rows):
             if session_id not in seen_ids:
                 row = self._rows.pop(session_id)
                 self.list_layout.removeWidget(row)
                 row.deleteLater()
+                self._token_warned.discard(session_id)
 
         self.count_label.setText(self._count_text(sessions))
         self.empty_label.setVisible(not sessions)
@@ -229,6 +233,18 @@ class MainWindow(QWidget):
         self._update_blink_timer(needs_permission)
         self.permission_state_changed.emit(needs_permission)
         QTimer.singleShot(0, self._fit_height_to_content)
+
+    def _check_token_warning(self, session):
+        """Emits token_warning once per session the first time its total
+        crosses TOKEN_TIER_HIGH, never again for that session (even if the
+        total keeps climbing) - the pill color already tracks further
+        growth, so re-notifying on every poll would just be noise."""
+        if session.session_id in self._token_warned:
+            return
+        total = session.tokens_in + session.tokens_out
+        if total >= status_store.TOKEN_TIER_HIGH:
+            self._token_warned.add(session.session_id)
+            self.token_warning.emit(session.project, total)
 
     def _update_blink_timer(self, needs_blink):
         if needs_blink and not self._blink_timer.isActive():

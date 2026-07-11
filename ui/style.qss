@@ -103,9 +103,24 @@ QLabel#timeLabel {
 }
 
 QLabel#tokenLabel {
-    color: #8b8f9a;
+    color: #d4d4d8;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 700;
+    background-color: rgba(255, 255, 255, 25);
+    border-radius: 7px;
+    padding: 2px 7px;
+}
+QLabel#tokenLabel[tokenTier="warn"] {
+    color: #fde047;
+    background-color: rgba(250, 204, 21, 35);
+}
+QLabel#tokenLabel[tokenTier="high"] {
+    color: #fdba74;
+    background-color: rgba(249, 115, 22, 35);
+}
+QLabel#tokenLabel[tokenTier="critical"] {
+    color: #fca5a5;
+    background-color: rgba(239, 68, 68, 40);
 }
 
 QLabel#emptyLabel {
