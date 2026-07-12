@@ -13,7 +13,7 @@ running on this machine: project (folder name), current task, and whether it's
 running, idle, finished, possibly closed, or waiting on your permission. The
 window height grows and shrinks automatically with the number of sessions.
 
-![Claude Sessions Widget showing a permission alert, running/idle/finished sessions, and the token-tier pill colors](docs/screenshot.png)
+![Claude Sessions Widget showing a permission alert, running/idle/finished sessions, the model pill, and the token-tier pill colors on both the per-turn and context pills](docs/screenshot.png)
 
 *(Rendered from synthetic demo data for illustration — not a real session.)*
 
@@ -90,18 +90,51 @@ window height grows and shrinks automatically with the number of sessions.
    if you hover it; only the input+output total is shown inline (e.g. "30k
    tok"). If no transcript path is available, the token badge is just omitted
    for that row — this never blocks or errors.
-6. **Token pill colors**: the token badge's background tints as a session's
-   per-turn total climbs — grey by default, yellow past 100k, orange past
-   150k, red past 200k (see `token_tier()` in `status_store.py`). The first
-   time a session crosses 150k, a one-time tray notification fires
+6. **Token pill colors**: both token pills (per-turn and context, see below)
+   tint using the same tiers — grey by default, yellow past 100k, orange past
+   150k, red past 200k (see `token_tier()` in `status_store.py`).
+7. **Context size**: the per-turn token pill deliberately excludes
+   `cache_read_input_tokens`/`cache_creation_input_tokens` (see above), but
+   that means it can't show how large the conversation itself has gotten —
+   which is what actually gets resent (and billed) on every future turn, and
+   what eventually triggers auto-compaction. `Stop` also calls
+   `latest_context_size()`, which reads just the tail of the transcript
+   (bounded to `CONTEXT_TAIL_BYTES`, so the cost doesn't grow with session
+   length) and takes `input_tokens + cache_creation_input_tokens +
+   cache_read_input_tokens` from the *last* usage entry seen — i.e. the full
+   size of what was actually sent to the model on the most recent API call.
+   That's stored as `contextTokens` and rendered as a second pill (e.g. "82k
+   ctx") next to the per-turn one, using the same `token_tier()` color
+   thresholds — which is the number those thresholds actually describe well,
+   since 100k–200k of *cumulative* context is a realistic and meaningful
+   range, unlike 100k–200k in a single turn. The first time a session's
+   `contextTokens` crosses 150k, a one-time tray notification fires
    suggesting you start a fresh session (large contexts get slower and more
    expensive); it won't repeat for that session even if the total keeps
    climbing, and it resets if the session disappears and a new one reuses
-   the slot.
-7. **`cd` commands are shortened** in the task line to just the target
+   the slot. It's deliberately keyed off context size rather than the
+   per-turn total — a single huge turn (e.g. reading one large file) isn't
+   the same signal as a conversation that's actually grown large — see
+   `_check_token_warning()` in `ui/main_window.py`.
+8. **`cd` commands are shortened** in the task line to just the target
    folder (e.g. `cd "C:/long/path/to/widget" && pytest` → `cd widget/ &&
    pytest`) — see `_shorten_cd_command()` in `hooks/widget_status.py`. Long
    absolute paths otherwise dominate the line with no useful signal.
+9. **Model pill**: `Stop` also calls `latest_model()`, which reads the same
+   transcript tail as `latest_context_size()` and pulls the `model` field off
+   the most recent assistant message — the model actually used for the last
+   API call, so a mid-session `/model` switch (or an automatic fallback)
+   shows up rather than whatever the session started with. The raw id (e.g.
+   `claude-sonnet-5-20250929`) is stored as-is, but `short_model_label()` in
+   `status_store.py` turns it into a short label (`Sonnet 5`) for the pill —
+   raw ids are too long for the row, and the version-before/after-family
+   ordering has changed across model generations, so both are parsed. The
+   pill sits directly left of the context pill on the task line, forming one
+   right-aligned cluster under the token pill rather than spreading across
+   the row; the raw id is still available in the row's tooltip. Like the
+   token/context pills, it's only known once a turn completes, so a
+   freshly-started session shows no model pill until its first response
+   finishes.
 
 ## Setup
 
