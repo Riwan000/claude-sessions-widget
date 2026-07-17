@@ -111,9 +111,35 @@ class SessionRow(QFrame):
 
         body.addLayout(header)
 
+        task_row = QHBoxLayout()
+        task_row.setSpacing(6)
+
         self.task_label = QLabel()
         self.task_label.setObjectName("taskLabel")
-        body.addWidget(self.task_label)
+        # Without this, Qt's layout treats the label's full (un-elided) text
+        # width as its minimum size, so adding a third pill (model, alongside
+        # token/context) could make the row wider than the window itself and
+        # silently clip the rightmost pill instead of shrinking this label -
+        # _apply_task_elide() already re-truncates the text to whatever width
+        # it's actually given, so it's safe to let layout shrink it to 0.
+        self.task_label.setMinimumWidth(0)
+        task_row.addWidget(self.task_label, 1)
+
+        # Model and context pills share the task/prompt line rather than the
+        # header, since they're per-turn details like the task text next to
+        # them - not identity info like the project name and per-turn token
+        # pill above. Model sits directly left of context so the two form one
+        # pill cluster right-aligned under the token pill, instead of
+        # spreading across the row.
+        self.model_label = QLabel()
+        self.model_label.setObjectName("modelLabel")
+        task_row.addWidget(self.model_label, alignment=Qt.AlignVCenter)
+
+        self.context_label = QLabel()
+        self.context_label.setObjectName("contextLabel")
+        task_row.addWidget(self.context_label, alignment=Qt.AlignVCenter)
+
+        body.addLayout(task_row)
 
         outer.addLayout(body)
 
@@ -145,6 +171,10 @@ class SessionRow(QFrame):
             tooltip_lines.append(
                 f"Last turn: {total:,} tokens (in: {session.tokens_in:,}, out: {session.tokens_out:,})"
             )
+        if session.has_context:
+            tooltip_lines.append(f"Context so far: {session.context_tokens:,} tokens")
+        if session.has_model:
+            tooltip_lines.append(f"Model: {session.model}")
         tooltip_lines.append(session.cwd)
         self.setToolTip("\n".join(tooltip_lines))
 
@@ -155,6 +185,21 @@ class SessionRow(QFrame):
         else:
             self.token_label.setText("")
         self.token_label.setVisible(session.has_tokens)
+
+        if session.has_context:
+            self.context_label.setText(f"{status_store.format_tokens(session.context_tokens)} ctx")
+            _apply_property(
+                self.context_label, "tokenTier", status_store.token_tier(session.context_tokens)
+            )
+        else:
+            self.context_label.setText("")
+        self.context_label.setVisible(session.has_context)
+
+        if session.has_model:
+            self.model_label.setText(status_store.short_model_label(session.model))
+        else:
+            self.model_label.setText("")
+        self.model_label.setVisible(session.has_model)
 
         self.time_label.setText(status_store.format_relative(session.age_seconds))
 

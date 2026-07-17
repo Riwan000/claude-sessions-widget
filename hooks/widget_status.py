@@ -28,6 +28,7 @@ STATUS_DIR = Path.home() / ".claude" / "widget-status"
 MAX_STDIN_BYTES = 2_000_000
 MAX_TASK_CHARS = 200
 MAX_ANCESTOR_DEPTH = 12
+CONTEXT_TAIL_BYTES = 200_000
 
 TH32CS_SNAPPROCESS = 0x00000002
 
@@ -283,6 +284,69 @@ def sum_turn_tokens(transcript_path, offset):
     return {"input": input_tokens, "output": output_tokens}
 
 
+def _read_transcript_tail_lines(transcript_path):
+    """Reads just the tail (bounded by CONTEXT_TAIL_BYTES) of transcript_path
+    and returns its non-blank lines, most-recent-first. Shared by
+    latest_context_size() and latest_model(), which both only care about the
+    single most recent usage-bearing entry and don't need the whole
+    transcript."""
+    if not transcript_path:
+        return []
+    try:
+        path = Path(transcript_path)
+        size = path.stat().st_size
+        with open(path, "rb") as handle:
+            if size > CONTEXT_TAIL_BYTES:
+                handle.seek(size - CONTEXT_TAIL_BYTES)
+            content = handle.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return []
+    return [line.strip() for line in reversed(content.splitlines()) if line.strip()]
+
+
+def latest_context_size(transcript_path):
+    """Total context length (input + cache-creation + cache-read tokens) from
+    the most recent assistant usage entry in the transcript - the size of
+    what gets resent (and billed) on every subsequent turn, unlike
+    sum_turn_tokens()'s fresh-only per-turn total."""
+    for line in _read_transcript_tail_lines(transcript_path):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        return (
+            int(usage.get("input_tokens") or 0)
+            + int(usage.get("cache_creation_input_tokens") or 0)
+            + int(usage.get("cache_read_input_tokens") or 0)
+        )
+    return None
+
+
+def latest_model(transcript_path):
+    """Model id (e.g. 'claude-sonnet-5-20250929') from the most recent
+    assistant message in the transcript - the model actually used for the
+    last API call, so a mid-session /model switch (or an automatic fallback)
+    shows up rather than whatever the session started with."""
+    for line in _read_transcript_tail_lines(transcript_path):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        model = message.get("model")
+        if model:
+            return model
+    return None
+
+
 def load_or_create(session_id, cwd, now, shell_pid):
     """Loads the session's record (or scaffolds a fresh one) and refreshes
     the fields every event keeps current. Returns (path, record)."""
@@ -358,6 +422,14 @@ def handle_stop(session_id, cwd, payload, shell_pid):
     tokens = sum_turn_tokens(transcript_path, record.get("transcriptOffset"))
     if tokens is not None:
         record["tokens"] = tokens
+
+    context_tokens = latest_context_size(transcript_path)
+    if context_tokens is not None:
+        record["contextTokens"] = context_tokens
+
+    model = latest_model(transcript_path)
+    if model is not None:
+        record["model"] = model
 
     record["status"] = "finished"
     record["currentTool"] = ""

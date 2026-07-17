@@ -421,28 +421,26 @@ class TestTokenPill:
 class TestTokenWarningNotification:
     def test_fires_once_when_session_crosses_threshold(self, status_dir, make_window):
         write_session(status_dir, "alpha", "running", project="example-project",
-                      tokens={"input": 10_000, "output": 0})
+                      contextTokens=10_000)
         window = make_window()
 
         received = []
         window.token_warning.connect(lambda project, total: received.append((project, total)))
 
         write_session(status_dir, "alpha", "running", project="example-project",
-                      tokens={"input": 151_300, "output": 0})
+                      contextTokens=151_300)
         window.refresh()
 
         assert received == [("example-project", 151_300)]
 
     def test_does_not_refire_on_subsequent_refreshes(self, status_dir, make_window):
-        write_session(status_dir, "alpha", "running",
-                       tokens={"input": 10_000, "output": 0})
+        write_session(status_dir, "alpha", "running", contextTokens=10_000)
         window = make_window()
 
         received = []
         window.token_warning.connect(lambda project, total: received.append((project, total)))
 
-        write_session(status_dir, "alpha", "running",
-                       tokens={"input": 151_300, "output": 0})
+        write_session(status_dir, "alpha", "running", contextTokens=151_300)
         window.refresh()
         window.refresh()
         window.refresh()
@@ -450,8 +448,20 @@ class TestTokenWarningNotification:
         assert len(received) == 1
 
     def test_does_not_fire_below_threshold(self, status_dir, make_window):
+        write_session(status_dir, "alpha", "running", contextTokens=10_000)
+        window = make_window()
+
+        received = []
+        window.token_warning.connect(lambda project, total: received.append((project, total)))
+        window.refresh()
+
+        assert received == []
+
+    def test_does_not_fire_on_large_single_turn_alone(self, status_dir, make_window):
+        # A single huge turn (e.g. reading one large file) shouldn't trip
+        # this warning - only the cumulative context size should.
         write_session(status_dir, "alpha", "running",
-                       tokens={"input": 10_000, "output": 0})
+                      tokens={"input": 200_000, "output": 0})
         window = make_window()
 
         received = []
@@ -461,8 +471,7 @@ class TestTokenWarningNotification:
         assert received == []
 
     def test_forgets_session_once_it_disappears(self, status_dir, make_window):
-        write_session(status_dir, "alpha", "running",
-                       tokens={"input": 151_300, "output": 0})
+        write_session(status_dir, "alpha", "running", contextTokens=151_300)
         window = make_window()
         assert "alpha" in window._token_warned
 
@@ -470,6 +479,89 @@ class TestTokenWarningNotification:
         window.refresh()
 
         assert "alpha" not in window._token_warned
+
+
+class TestContextPill:
+    def test_no_context_hides_pill(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session())
+        assert row.context_label.isVisibleTo(row) is False
+        row.deleteLater()
+
+    def test_shows_formatted_context_total(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(context_tokens=82_000))
+        assert row.context_label.text() == "82k ctx"
+        assert row.context_label.isVisibleTo(row) is True
+        row.deleteLater()
+
+    def test_below_warn_threshold_has_default_tier(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(context_tokens=1_000))
+        assert row.context_label.property("tokenTier") == ""
+        row.deleteLater()
+
+    def test_warn_tier_at_100k(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(context_tokens=100_000))
+        assert row.context_label.property("tokenTier") == "warn"
+        row.deleteLater()
+
+    def test_critical_tier_at_200k(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(context_tokens=200_000))
+        assert row.context_label.property("tokenTier") == "critical"
+        row.deleteLater()
+
+    def test_tooltip_includes_context_line(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(context_tokens=82_000))
+        assert "Context so far: 82,000 tokens" in row.toolTip()
+        row.deleteLater()
+
+    def test_tooltip_omits_context_line_when_absent(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session())
+        assert "Context so far" not in row.toolTip()
+        row.deleteLater()
+
+
+class TestModelPill:
+    def test_no_model_hides_pill(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session())
+        assert row.model_label.isVisibleTo(row) is False
+        row.deleteLater()
+
+    def test_shows_short_model_label(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(model="claude-sonnet-5-20250929"))
+        assert row.model_label.text() == "Sonnet 5"
+        assert row.model_label.isVisibleTo(row) is True
+        row.deleteLater()
+
+    def test_tooltip_includes_raw_model_id(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(model="claude-opus-4-8"))
+        assert "Model: claude-opus-4-8" in row.toolTip()
+        row.deleteLater()
+
+    def test_tooltip_omits_model_line_when_absent(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session())
+        assert "Model:" not in row.toolTip()
+        row.deleteLater()
 
 
 class TestTaskElision:

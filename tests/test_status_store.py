@@ -81,6 +81,18 @@ class TestGetSessions:
         assert not session.has_tokens
         assert session.shell_pid == 0
 
+    def test_context_tokens_are_loaded(self, status_dir):
+        write_session(status_dir, "t", "finished", 5, contextTokens=82_000)
+        session = status_store.get_sessions()[0]
+        assert session.context_tokens == 82_000
+        assert session.has_context
+
+    def test_missing_context_tokens_default_to_zero(self, status_dir):
+        write_session(status_dir, "t", "running", 5)
+        session = status_store.get_sessions()[0]
+        assert session.context_tokens == 0
+        assert not session.has_context
+
     def test_current_tool_detail_is_loaded(self, status_dir):
         write_session(
             status_dir, "t", "running", 5,
@@ -105,6 +117,18 @@ class TestGetSessions:
         write_session(status_dir, "t", "running", 5)
         session = status_store.get_sessions()[0]
         assert session.language_icon == ""
+
+    def test_model_is_loaded(self, status_dir):
+        write_session(status_dir, "t", "running", 5, model="claude-sonnet-5-20250929")
+        session = status_store.get_sessions()[0]
+        assert session.model == "claude-sonnet-5-20250929"
+        assert session.has_model
+
+    def test_missing_model_defaults_to_empty(self, status_dir):
+        write_session(status_dir, "t", "running", 5)
+        session = status_store.get_sessions()[0]
+        assert session.model == ""
+        assert not session.has_model
 
 
 class TestClearFinished:
@@ -135,6 +159,24 @@ class TestFormatting:
     def test_format_tokens_precise(self):
         assert status_store.format_tokens_precise(151_300) == "151.3k"
         assert status_store.format_tokens_precise(200_000) == "200.0k"
+
+
+class TestShortModelLabel:
+    def test_current_id_style(self):
+        assert status_store.short_model_label("claude-sonnet-5-20250929") == "Sonnet 5"
+        assert status_store.short_model_label("claude-opus-4-8") == "Opus 4.8"
+        assert status_store.short_model_label("claude-haiku-4-5-20251001") == "Haiku 4.5"
+        assert status_store.short_model_label("claude-fable-5") == "Fable 5"
+
+    def test_older_version_before_family_style(self):
+        assert status_store.short_model_label("claude-3-5-sonnet-20241022") == "Sonnet 3.5"
+
+    def test_unrecognized_id_falls_back_to_raw(self):
+        assert status_store.short_model_label("some-future-model") == "some-future-model"
+
+    def test_empty_returns_empty(self):
+        assert status_store.short_model_label("") == ""
+        assert status_store.short_model_label(None) == ""
 
 
 class TestTokenTier:

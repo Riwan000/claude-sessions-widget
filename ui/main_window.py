@@ -235,16 +235,19 @@ class MainWindow(QWidget):
         QTimer.singleShot(0, self._fit_height_to_content)
 
     def _check_token_warning(self, session):
-        """Emits token_warning once per session the first time its total
-        crosses TOKEN_TIER_HIGH, never again for that session (even if the
-        total keeps climbing) - the pill color already tracks further
-        growth, so re-notifying on every poll would just be noise."""
+        """Emits token_warning once per session the first time its cumulative
+        context size crosses TOKEN_TIER_HIGH, never again for that session
+        (even if the total keeps climbing) - the pill color already tracks
+        further growth, so re-notifying on every poll would just be noise.
+        Keyed off context_tokens rather than the per-turn total, since it's
+        the size of the whole conversation - what actually gets resent (and
+        billed) on every future turn - that makes a fresh session worth
+        suggesting."""
         if session.session_id in self._token_warned:
             return
-        total = session.tokens_in + session.tokens_out
-        if total >= status_store.TOKEN_TIER_HIGH:
+        if session.context_tokens >= status_store.TOKEN_TIER_HIGH:
             self._token_warned.add(session.session_id)
-            self.token_warning.emit(session.project, total)
+            self.token_warning.emit(session.project, session.context_tokens)
 
     def _update_blink_timer(self, needs_blink):
         if needs_blink and not self._blink_timer.isActive():

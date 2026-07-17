@@ -20,14 +20,17 @@ def write_transcript(path, entries):
     return path
 
 
-def assistant_entry(message_id, input_tokens, output_tokens, uuid=None):
+def assistant_entry(message_id, input_tokens, output_tokens, uuid=None, model=None):
+    message = {
+        "id": message_id,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+    if model is not None:
+        message["model"] = model
     return {
         "type": "assistant",
         "uuid": uuid or f"uuid-{message_id}-{input_tokens}-{output_tokens}",
-        "message": {
-            "id": message_id,
-            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
-        },
+        "message": message,
     }
 
 
@@ -99,6 +102,101 @@ class TestSumTurnTokens:
         assert ws.sum_turn_tokens(transcript, 0) is None
 
 
+class TestLatestContextSize:
+    def test_returns_latest_usage_total(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl",
+            [
+                {
+                    "message": {
+                        "usage": {
+                            "input_tokens": 10,
+                            "cache_creation_input_tokens": 20,
+                            "cache_read_input_tokens": 30,
+                        }
+                    }
+                },
+                {
+                    "message": {
+                        "usage": {
+                            "input_tokens": 1,
+                            "cache_creation_input_tokens": 2,
+                            "cache_read_input_tokens": 97,
+                        }
+                    }
+                },
+            ],
+        )
+        assert ws.latest_context_size(transcript) == 100
+
+    def test_missing_cache_fields_default_to_zero(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl", [{"message": {"usage": {"input_tokens": 5}}}]
+        )
+        assert ws.latest_context_size(transcript) == 5
+
+    def test_lines_without_usage_are_skipped(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl",
+            [
+                {"message": {"usage": {"input_tokens": 42}}},
+                {"type": "user", "message": {"role": "user"}},
+            ],
+        )
+        assert ws.latest_context_size(transcript) == 42
+
+    def test_missing_transcript_returns_none(self, tmp_path):
+        assert ws.latest_context_size(tmp_path / "missing.jsonl") is None
+        assert ws.latest_context_size(None) is None
+
+    def test_no_usage_entries_returns_none(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl", [{"type": "permission-mode", "permissionMode": "auto"}]
+        )
+        assert ws.latest_context_size(transcript) is None
+
+    def test_only_reads_tail_of_large_transcript(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ws, "CONTEXT_TAIL_BYTES", 200)
+        old_line = json.dumps({"message": {"usage": {"input_tokens": 999_999}}})
+        padding = " " * 500  # forces the real usage entry past the tail window
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(f"{old_line}\n// {padding}\n", encoding="utf-8")
+        with open(transcript, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"message": {"usage": {"input_tokens": 7}}}) + "\n")
+
+        assert ws.latest_context_size(transcript) == 7
+
+
+class TestLatestModel:
+    def test_returns_model_from_latest_entry(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl",
+            [
+                assistant_entry("msg_1", 5, 100, model="claude-haiku-4-5-20251001"),
+                assistant_entry("msg_2", 3, 50, model="claude-sonnet-5-20250929"),
+            ],
+        )
+        assert ws.latest_model(transcript) == "claude-sonnet-5-20250929"
+
+    def test_skips_entries_without_model(self, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl",
+            [
+                assistant_entry("msg_1", 5, 100, model="claude-sonnet-5-20250929"),
+                assistant_entry("msg_2", 3, 50),
+            ],
+        )
+        assert ws.latest_model(transcript) == "claude-sonnet-5-20250929"
+
+    def test_no_model_anywhere_returns_none(self, tmp_path):
+        transcript = write_transcript(tmp_path / "t.jsonl", [assistant_entry("msg_1", 5, 100)])
+        assert ws.latest_model(transcript) is None
+
+    def test_missing_transcript_returns_none(self, tmp_path):
+        assert ws.latest_model(tmp_path / "missing.jsonl") is None
+        assert ws.latest_model(None) is None
+
+
 class TestFindStableAncestorPid:
     def test_walks_up_to_claude_exe(self, monkeypatch):
         processes = {
@@ -159,12 +257,17 @@ class TestHandlers:
         assert record["transcriptOffset"] == transcript.stat().st_size
 
         with open(transcript, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(assistant_entry("msg_1", 7, 70)) + "\n")
+            handle.write(
+                json.dumps(assistant_entry("msg_1", 7, 70, model="claude-sonnet-5-20250929"))
+                + "\n"
+            )
 
         ws.handle_stop("s1", "C:/x/proj", {"transcript_path": str(transcript)}, 42)
         record = self.read_record(status_dir, "s1")
         assert record["status"] == "finished"
         assert record["tokens"] == {"input": 7, "output": 70}
+        assert record["contextTokens"] == 7
+        assert record["model"] == "claude-sonnet-5-20250929"
 
         ws.handle_session_end("s1", "C:/x/proj", {}, 42)
         assert not (status_dir / "s1.json").exists()
@@ -188,6 +291,36 @@ class TestHandlers:
         record = self.read_record(status_dir, "s2")
         assert record["status"] == "finished"
         assert "tokens" not in record
+
+    def test_stop_without_transcript_skips_context_tokens(self, status_dir):
+        ws.handle_session_start("s2b", "C:/x/proj", {}, 42)
+        ws.handle_stop("s2b", "C:/x/proj", {}, 42)
+        record = self.read_record(status_dir, "s2b")
+        assert record["status"] == "finished"
+        assert "contextTokens" not in record
+        assert "model" not in record
+
+    def test_stop_records_model_from_transcript(self, status_dir, tmp_path):
+        transcript = write_transcript(
+            tmp_path / "t.jsonl",
+            [assistant_entry("msg_1", 5, 40, model="claude-opus-4-8")],
+        )
+        ws.handle_session_start("s2c", "C:/x/proj", {}, 42)
+        ws.handle_stop("s2c", "C:/x/proj", {"transcript_path": str(transcript)}, 42)
+        assert self.read_record(status_dir, "s2c")["model"] == "claude-opus-4-8"
+
+    def test_stop_keeps_previous_model_when_turn_has_none(self, status_dir, tmp_path):
+        # e.g. a turn with no assistant usage entry yet - shouldn't blank out
+        # a model recorded on an earlier turn.
+        transcript = write_transcript(tmp_path / "t.jsonl", [])
+        ws.handle_session_start("s2d", "C:/x/proj", {}, 42)
+        path = ws.status_path("s2d")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["model"] = "claude-sonnet-5-20250929"
+        ws.atomic_write(path, record)
+
+        ws.handle_stop("s2d", "C:/x/proj", {"transcript_path": str(transcript)}, 42)
+        assert self.read_record(status_dir, "s2d")["model"] == "claude-sonnet-5-20250929"
 
     def test_tool_complete_only_clears_permission(self, status_dir):
         ws.handle_session_start("s3", "C:/x/proj", {}, 42)
