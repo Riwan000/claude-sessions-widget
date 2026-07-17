@@ -189,6 +189,12 @@ window edge to change the width. Height is automatic — it grows and shrinks
 with the number of sessions shown, capped at 80% of your screen height (it
 scrolls internally beyond that).
 
+The **▾ button** in the header collapses the window down to just the header
+bar, hiding the session list — useful when you want the widget parked on
+screen without it taking up room. Click **▸** to expand it again. The
+collapsed state is saved to `_window.json` alongside the position and width,
+so it survives a restart.
+
 It also adds a system tray icon with a right-click menu: **Show/Hide**,
 **Clear finished**, **Quit**. The icon doubles as a status light: green
 normally, red while any session is waiting on a permission prompt — so
@@ -272,13 +278,17 @@ widget/
   app.py                 # entry point: window, tray icon, poll timer, single-instance lock
   status_store.py        # reads widget-status/*.json, sorts, flags stale/prunes old
   focus_session.ps1      # click-to-focus: walks the process tree, no title matching
-  install.py             # wires/re-wires the 6 hooks; --autostart manages the login Run entry
+  install.py             # wires/re-wires the 7 hooks; --autostart manages the login Run entry
   ui/
     main_window.py         # frameless/translucent/always-on-top window
     session_row.py          # one row's widgets + rendering + click handling
     style.qss                # stylesheet
   hooks/
     widget_status.py        # the Claude Code hook script (see "How it works")
-  tests/                 # pytest suite for the hook script and status store
-  requirements.txt
+  tests/                 # pytest suite for the hook script, status store, and Qt layer
+    conftest.py             # puts the project root and hooks/ on sys.path
+  docs/
+    screenshot.png          # the screenshot embedded at the top of this README
+  requirements.txt       # runtime dep (PySide6)
+  requirements-dev.txt   # runtime + test deps (pytest)
 ```
