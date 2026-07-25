@@ -34,9 +34,23 @@ RESIZE_EDGE_MARGIN = 8
 def load_window_geometry():
     try:
         data = json.loads(WINDOW_STATE_PATH.read_text(encoding="utf-8"))
-        return {**DEFAULT_GEOMETRY, **data}
+        geometry = {**DEFAULT_GEOMETRY, **data}
     except (OSError, ValueError):
-        return dict(DEFAULT_GEOMETRY)
+        geometry = dict(DEFAULT_GEOMETRY)
+    return _clamp_to_screen(geometry)
+
+
+def _clamp_to_screen(geometry):
+    # A position saved while a second monitor was attached can land fully
+    # off-screen once that monitor is gone - the window is then still
+    # running, just invisible, with no on-screen affordance to drag it back.
+    screen = QApplication.primaryScreen()
+    if screen is None:
+        return geometry
+    avail = screen.availableGeometry()
+    x = max(avail.x(), min(geometry["x"], avail.x() + avail.width() - geometry["width"]))
+    y = max(avail.y(), min(geometry["y"], avail.y() + avail.height() - geometry["height"]))
+    return {**geometry, "x": x, "y": y}
 
 
 def save_window_geometry(geometry):
