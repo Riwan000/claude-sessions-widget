@@ -4,9 +4,10 @@ Thanks for considering a contribution to Claude Sessions Widget.
 
 ## Scope
 
-This is a small, focused, **Windows-only** desktop utility. Before proposing
-a feature, check `TODO.md` — it's the running list of known gaps and
-deliberately-deferred work, with the reasoning behind each decision.
+This is a small, focused, **Windows-only** desktop utility. Known gaps and
+deliberately-accepted tradeoffs (e.g. the Windows Terminal multi-window
+focus limitation — see the README's "Click any row" section) are documented
+inline next to the code they explain, rather than tracked separately.
 
 ## Setup
 
@@ -44,5 +45,4 @@ Open an issue with:
 
 ## Pull requests
 
-Keep PRs narrowly scoped — one behavior change per PR. Reference the
-relevant `TODO.md` item if there is one.
+Keep PRs narrowly scoped — one behavior change per PR.
