@@ -88,6 +88,8 @@ class MainWindow(QWidget):
     hidden_to_tray = Signal()
     permission_state_changed = Signal(bool)  # True while any session needs permission
     token_warning = Signal(str, int)  # project, total tokens - fires once per session
+    session_inactive = Signal(str)  # project - fires when a session is removed due to inactivity
+    task_completed = Signal(object)  # session - fires when a session completes a task
 
     def __init__(self):
         super().__init__()
@@ -101,6 +103,7 @@ class MainWindow(QWidget):
 
         self._rows = {}
         self._token_warned = set()  # session_ids already notified past TOKEN_TIER_HIGH
+        self._prev_statuses = {}  # session_id -> status for transition detection
         self._blink_on = False
         self._collapsed = bool(geometry.get("collapsed", False))
         self._build_ui()
@@ -138,7 +141,7 @@ class MainWindow(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("Claude Sessions")
+        title = QLabel("AI Sessions")
         title.setObjectName("titleLabel")
         header_layout.addWidget(title)
 
@@ -175,7 +178,7 @@ class MainWindow(QWidget):
         self.list_layout.setSpacing(6)
         self.list_layout.addStretch(1)
 
-        self.empty_label = QLabel("No active Claude sessions")
+        self.empty_label = QLabel("No active AI sessions")
         self.empty_label.setObjectName("emptyLabel")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.list_layout.insertWidget(0, self.empty_label)
@@ -232,6 +235,7 @@ class MainWindow(QWidget):
                 self.list_layout.removeWidget(row)
                 self.list_layout.insertWidget(index, row)
             self._check_token_warning(session)
+            self._check_task_completed(session)
 
         for session_id in list(self._rows):
             if session_id not in seen_ids:
@@ -239,6 +243,9 @@ class MainWindow(QWidget):
                 self.list_layout.removeWidget(row)
                 row.deleteLater()
                 self._token_warned.discard(session_id)
+                self._prev_statuses.pop(session_id, None)
+                if row.session.age_seconds >= status_store.INACTIVE_TIMEOUT_SECONDS:
+                    self.session_inactive.emit(row.session.project)
 
         self.count_label.setText(self._count_text(sessions))
         self.empty_label.setVisible(not sessions)
@@ -247,6 +254,18 @@ class MainWindow(QWidget):
         self._update_blink_timer(needs_permission)
         self.permission_state_changed.emit(needs_permission)
         QTimer.singleShot(0, self._fit_height_to_content)
+
+    def _check_task_completed(self, session):
+        """Emits task_completed when a session transitions from running to finished,
+        provided turn_duration meets or exceeds DEFAULT_NOTIFICATION_THRESHOLD_SECONDS."""
+        prev = self._prev_statuses.get(session.session_id)
+        if prev == "running" and session.status == "finished":
+            threshold = getattr(
+                status_store, "DEFAULT_NOTIFICATION_THRESHOLD_SECONDS", 5.0
+            )
+            if session.turn_duration >= threshold:
+                self.task_completed.emit(session)
+        self._prev_statuses[session.session_id] = session.status
 
     def _check_token_warning(self, session):
         """Emits token_warning once per session the first time its cumulative

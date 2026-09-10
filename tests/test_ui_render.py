@@ -83,6 +83,7 @@ def make_session(**overrides):
         display_status="running",
         started_at=now - 60,
         updated_at=now,
+        tool="claude",
     )
     fields.update(overrides)
     return status_store.Session(**fields)
@@ -380,6 +381,51 @@ class TestPersonalityDisplay:
         assert row.project_label.text() == "widget"
         row.deleteLater()
 
+    def test_running_with_antigravity_tools(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(
+            make_session(status="running", display_status="running", current_tool="replace_file_content")
+        )
+        assert row.personality_label.text() == "✏️ Editing"
+        row.deleteLater()
+
+        row2 = SessionRow(
+            make_session(status="running", display_status="running", current_tool="run_command")
+        )
+        assert row2.personality_label.text() == "⚡ Running"
+        row2.deleteLater()
+
+        row3 = SessionRow(
+            make_session(status="running", display_status="running", current_tool="view_file")
+        )
+        assert row3.personality_label.text() == "📖 Reading"
+        row3.deleteLater()
+
+        row4 = SessionRow(
+            make_session(status="running", display_status="running", current_tool="invoke_subagent")
+        )
+        assert row4.personality_label.text() == "🤖 Delegating"
+        row4.deleteLater()
+
+
+class TestToolBadge:
+    def test_claude_badge(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tool="claude"))
+        assert row.tool_badge_label.text() == "🟣"
+        assert "[Claude]" in row.toolTip()
+        row.deleteLater()
+
+    def test_antigravity_badge(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tool="antigravity"))
+        assert row.tool_badge_label.text() == "🔷"
+        assert "[Antigravity]" in row.toolTip()
+        row.deleteLater()
+
 
 class TestTokenPill:
     def test_no_tokens_hides_pill(self, qapp):
@@ -479,6 +525,119 @@ class TestTokenWarningNotification:
         window.refresh()
 
         assert "alpha" not in window._token_warned
+
+
+class TestInactiveSessionNotification:
+    def test_fires_notification_when_session_crosses_inactivity_threshold(
+        self, status_dir, make_window, monkeypatch
+    ):
+        now = time.time()
+        monkeypatch.setattr(time, "time", lambda: now)
+
+        write_session(status_dir, "alpha", "running", project="my-project", age_seconds=0)
+        window = make_window()
+        assert "alpha" in window._rows
+
+        received = []
+        window.session_inactive.connect(received.append)
+
+        # 15 minutes and 5 seconds pass in real time
+        monkeypatch.setattr(time, "time", lambda: now + status_store.INACTIVE_TIMEOUT_SECONDS + 5)
+        window.refresh()
+
+        assert received == ["my-project"]
+        assert "alpha" not in window._rows
+        assert not (status_dir / "alpha.json").exists()
+
+    def test_does_not_fire_notification_when_session_ended_normally(
+        self, status_dir, make_window
+    ):
+        write_session(status_dir, "alpha", "running", project="my-project", age_seconds=0)
+        window = make_window()
+        assert "alpha" in window._rows
+
+        received = []
+        window.session_inactive.connect(received.append)
+
+        # Normal SessionEnd hook deletes the file while it was recently active
+        (status_dir / "alpha.json").unlink()
+        window.refresh()
+
+        assert received == []
+        assert "alpha" not in window._rows
+
+    def test_already_inactive_sessions_do_not_fire_notification_on_startup(
+        self, status_dir, make_window
+    ):
+        write_session(
+            status_dir,
+            "old",
+            "finished",
+            project="old-project",
+            age_seconds=status_store.INACTIVE_TIMEOUT_SECONDS + 60,
+        )
+        window = make_window()
+
+        received = []
+        window.session_inactive.connect(received.append)
+        window.refresh()
+
+        assert received == []
+        assert window._rows == {}
+        assert not (status_dir / "old.json").exists()
+
+    def test_multiple_inactive_sessions_fire_notifications(
+        self, status_dir, make_window, monkeypatch
+    ):
+        now = time.time()
+        monkeypatch.setattr(time, "time", lambda: now)
+
+        write_session(status_dir, "s1", "running", project="project-1", age_seconds=0)
+        write_session(status_dir, "s2", "idle", project="project-2", age_seconds=0)
+        window = make_window()
+        assert len(window._rows) == 2
+
+        received = []
+        window.session_inactive.connect(received.append)
+
+        monkeypatch.setattr(time, "time", lambda: now + status_store.INACTIVE_TIMEOUT_SECONDS + 10)
+        window.refresh()
+
+        assert sorted(received) == ["project-1", "project-2"]
+        assert len(window._rows) == 0
+
+    def test_session_activity_resets_inactivity_timer(
+        self, status_dir, make_window, monkeypatch
+    ):
+        now = time.time()
+        monkeypatch.setattr(time, "time", lambda: now)
+
+        write_session(status_dir, "alpha", "running", project="my-project", age_seconds=0)
+        window = make_window()
+
+        received = []
+        window.session_inactive.connect(received.append)
+
+        # 10 minutes pass (under 15m), and a new tool update happens
+        now_10m = now + 10 * 60
+        monkeypatch.setattr(time, "time", lambda: now_10m)
+        write_session(status_dir, "alpha", "running", project="my-project", age_seconds=0)
+        window.refresh()
+
+        assert received == []
+        assert "alpha" in window._rows
+
+        # Another 10 minutes pass (total 20m from start, but only 10m from last update)
+        monkeypatch.setattr(time, "time", lambda: now_10m + 10 * 60)
+        window.refresh()
+        assert received == []
+        assert "alpha" in window._rows
+
+        # 6 more minutes pass (16m from last update) -> now it times out
+        monkeypatch.setattr(time, "time", lambda: now_10m + 16 * 60)
+        window.refresh()
+        assert received == ["my-project"]
+        assert "alpha" not in window._rows
 
 
 class TestContextPill:
@@ -634,3 +793,65 @@ class TestTrayIcon:
 
         image = app_module.make_tray_icon().pixmap(64, 64).toImage()
         assert image.pixelColor(32, 32) == QColor(app_module.TRAY_COLOR_OK)
+
+
+class TestTaskCompletedNotification:
+    def test_emits_when_session_transitions_running_to_finished_above_threshold(
+        self, status_dir, make_window
+    ):
+        write_session(status_dir, "s1", "running")
+        window = make_window()
+        received = []
+        window.task_completed.connect(received.append)
+
+        window.refresh()
+        assert received == []
+
+        write_session(status_dir, "s1", "finished", turnDuration=6.0)
+        window.refresh()
+
+        assert len(received) == 1
+        assert received[0].session_id == "s1"
+        assert received[0].turn_duration == 6.0
+
+    def test_does_not_emit_when_duration_below_threshold(
+        self, status_dir, make_window
+    ):
+        write_session(status_dir, "s1", "running")
+        window = make_window()
+        received = []
+        window.task_completed.connect(received.append)
+
+        window.refresh()
+        assert received == []
+
+        write_session(status_dir, "s1", "finished", turnDuration=2.5)
+        window.refresh()
+
+        assert received == []
+
+    def test_does_not_emit_if_session_was_already_finished(
+        self, status_dir, make_window
+    ):
+        write_session(status_dir, "s1", "finished", turnDuration=10.0)
+        window = make_window()
+        received = []
+        window.task_completed.connect(received.append)
+
+        window.refresh()
+        assert received == []
+
+    def test_does_not_re_emit_on_subsequent_refreshes(
+        self, status_dir, make_window
+    ):
+        write_session(status_dir, "s1", "running")
+        window = make_window()
+        received = []
+        window.task_completed.connect(received.append)
+
+        write_session(status_dir, "s1", "finished", turnDuration=8.0)
+        window.refresh()
+        assert len(received) == 1
+
+        window.refresh()
+        assert len(received) == 1

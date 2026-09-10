@@ -8,28 +8,29 @@ describes. This file covers what you need to work on the code.
 ## Commands
 
 ```powershell
-.venv\Scripts\python.exe -m pytest tests/     # tests (138, ~2s, no window appears)
+.venv\Scripts\python.exe -m pytest tests/     # tests (185, ~2s, no window appears)
 .venv\Scripts\python.exe app.py               # run the widget (console)
 .venv\Scripts\pythonw.exe app.py              # run with no console window
-C:\Python313\python.exe install.py            # wire the 7 hooks into ~/.claude/settings.json
+C:\Python313\python.exe install.py            # wire hooks into Antigravity (~/.gemini) & Claude (~/.claude)
+C:\Python313\python.exe install.py --antigravity  # wire Antigravity hooks only
+C:\Python313\python.exe install.py --claude       # wire Claude Code hooks only
 ```
 
 `install.py` bakes `sys.executable` into the hook commands, so **run it with
 the Python you want the hooks to use** — not the venv's. Re-run it after
 moving the project folder or switching Python installs; it's idempotent and
-backs up `settings.json` first.
+backs up config files first.
 
 ## Architecture
 
-Two processes that never import each other, talking through the filesystem:
+Processes talking through the filesystem (`~/.claude/widget-status/`):
 
-1. `hooks/widget_status.py` — invoked by Claude Code on 7 hook events, writes
-   one JSON file per session to `~/.claude/widget-status/`.
-2. `app.py` + `ui/` — polls that directory every 2s via `status_store.py` and
-   renders a row per file.
+1. `hooks/widget_status.py` — invoked by Claude Code on 7 hook events.
+2. `hooks/antigravity_status.py` — invoked by Google Antigravity on PreInvocation, PreToolUse, PostToolUse, and Stop events.
+3. `app.py` + `ui/` — polls the status directory every 2s via `status_store.py` and renders a row per session with tool source badges (🟣 Claude, 🔷 Antigravity).
 
 `status_store.py` is imported only by the UI side. `focus_session.ps1` is
-spawned on row click to foreground a session's terminal.
+spawned on row click to foreground a session's terminal or window.
 
 ## Hard constraints
 

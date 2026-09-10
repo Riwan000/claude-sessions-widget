@@ -18,6 +18,7 @@ STATUS_LABELS = {
 # from the last PreToolUse call. Unrecognized tools (custom/MCP) fall back to
 # a generic "Working" rather than showing nothing.
 TOOL_PERSONALITY = {
+    # Claude Code tools
     "Read": ("📖", "Reading"),
     "NotebookEdit": ("📖", "Reading"),
     "Edit": ("✏️", "Editing"),
@@ -29,8 +30,32 @@ TOOL_PERSONALITY = {
     "WebSearch": ("🔍", "Searching"),
     "TodoWrite": ("📝", "Planning"),
     "Task": ("🤖", "Delegating"),
+    # Antigravity tools
+    "view_file": ("📖", "Reading"),
+    "replace_file_content": ("✏️", "Editing"),
+    "write_to_file": ("✏️", "Writing"),
+    "run_command": ("⚡", "Running"),
+    "grep_search": ("🔍", "Searching"),
+    "find_by_name": ("🔍", "Finding"),
+    "read_url_content": ("🔍", "Fetching"),
+    "search_web": ("🔍", "Searching"),
+    "invoke_subagent": ("🤖", "Delegating"),
+    "define_subagent": ("⚙️", "Defining"),
+    "manage_subagents": ("🤖", "Managing"),
+    "manage_task": ("⚙️", "Managing"),
+    "schedule": ("⏰", "Scheduling"),
+    "ask_question": ("❓", "Asking"),
+    "generate_image": ("🎨", "Generating"),
 }
 TOOL_PERSONALITY_FALLBACK = ("🔧", "Working")
+
+TOOL_BADGES = {
+    "claude": "🟣",
+    "antigravity": "🔷",
+    "cursor": "⚡",
+    "windsurf": "🌊",
+    "aider": "🦾",
+}
 
 # Shown when a session has no active tool call. permission/stale are
 # deliberately absent here - they already have their own dedicated visual
@@ -90,6 +115,10 @@ class SessionRow(QFrame):
         self.status_dot.setObjectName("statusDot")
         self.status_dot.setFixedSize(8, 8)
         header.addWidget(self.status_dot, alignment=Qt.AlignVCenter)
+
+        self.tool_badge_label = QLabel()
+        self.tool_badge_label.setObjectName("toolBadgeLabel")
+        header.addWidget(self.tool_badge_label, alignment=Qt.AlignVCenter)
 
         self.project_label = QLabel()
         self.project_label.setObjectName("projectLabel")
@@ -153,6 +182,11 @@ class SessionRow(QFrame):
         for widget in (self.accent_bar, self.status_dot):
             _apply_property(widget, "blink", "off")
 
+        tool_name = session.tool.lower() if hasattr(session, "tool") and session.tool else "claude"
+        badge = TOOL_BADGES.get(tool_name, "🤖")
+        self.tool_badge_label.setText(badge)
+        self.tool_badge_label.setToolTip(f"{tool_name.capitalize()} session")
+
         self.project_label.setText(session.project)
         self.personality_label.setText(_personality_text(session))
 
@@ -164,8 +198,9 @@ class SessionRow(QFrame):
             self._task_text = session.task or STATUS_LABELS.get(session.display_status, "")
         self._apply_task_elide()
 
+        tool_display = tool_name.capitalize()
         status_word = STATUS_LABELS.get(session.display_status, session.display_status)
-        tooltip_lines = [f"{session.project} — {status_word}", session.task or "(no task yet)"]
+        tooltip_lines = [f"[{tool_display}] {session.project} — {status_word}", session.task or "(no task yet)"]
         if session.has_tokens:
             total = session.tokens_in + session.tokens_out
             tooltip_lines.append(

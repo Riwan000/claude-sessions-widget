@@ -60,8 +60,9 @@ window height grows and shrinks automatically with the number of sessions.
      hooks, so an unconditional write could land after Stop and flip a
      finished session back to running.
    - `Stop` (Claude finishes responding) → `status: "finished"`, plus
-     `tokens: {input, output}` for that turn (see below), and clears the
-     tool line.
+     `tokens: {input, output}` for that turn (see below), records
+     `turnDuration`, clears the tool line, and appends the completed task to
+     `history.csv` in the widget project folder.
    - `SessionEnd` (the CLI actually exits) → deletes the file.
 3. `app.py` polls that directory every 2 seconds and renders one row per file.
    - A `running` session whose file hasn't been touched in 10+ minutes is
@@ -70,9 +71,18 @@ window height grows and shrinks automatically with the number of sessions.
      `SessionEnd`.
    - A session waiting on a permission prompt is sorted to the very top and
      its accent bar/status dot blink red every 500ms until it clears.
-4. Files untouched for 24+ hours are pruned automatically as basic garbage
-   collection for crashed/never-closed sessions.
-5. **Token count per turn**: `UserPromptSubmit` records the byte offset of the
+4. **Task completion notifications**: when a session finishes a turn that took
+   at least 5.0 seconds (customizable via `WIDGET_NOTIFY_THRESHOLD_SECONDS`),
+   a system tray notification and gentle audio chime trigger. Clicking the
+   notification focuses the terminal or IDE window that completed the task.
+5. **CSV History Logging**: every completed task across Claude Code and
+   Antigravity is appended to `history.csv` (located directly in the widget
+   folder) with: `timestamp`, `project`, `cli_or_ide`, `model`,
+   `duration_seconds`, `prompt`, `tokens_in`, `tokens_out`, and
+   `context_tokens`. Entries are append-only and never overwritten.
+6. Sessions inactive for more than 15 minutes are removed from the list
+   and pruned automatically, and a system tray notification is displayed.
+7. **Token count per turn**: `UserPromptSubmit` records the byte offset of the
    session's transcript file (`transcript_path` from the hook payload) at the
    moment the prompt is submitted. `Stop` reads everything appended to that
    transcript since that offset and sums the `usage.input_tokens` /
@@ -90,10 +100,10 @@ window height grows and shrinks automatically with the number of sessions.
    if you hover it; only the input+output total is shown inline (e.g. "30k
    tok"). If no transcript path is available, the token badge is just omitted
    for that row — this never blocks or errors.
-6. **Token pill colors**: both token pills (per-turn and context, see below)
+8. **Token pill colors**: both token pills (per-turn and context, see below)
    tint using the same tiers — grey by default, yellow past 100k, orange past
    150k, red past 200k (see `token_tier()` in `status_store.py`).
-7. **Context size**: the per-turn token pill deliberately excludes
+9. **Context size**: the per-turn token pill deliberately excludes
    `cache_read_input_tokens`/`cache_creation_input_tokens` (see above), but
    that means it can't show how large the conversation itself has gotten —
    which is what actually gets resent (and billed) on every future turn, and
@@ -116,11 +126,11 @@ window height grows and shrinks automatically with the number of sessions.
    per-turn total — a single huge turn (e.g. reading one large file) isn't
    the same signal as a conversation that's actually grown large — see
    `_check_token_warning()` in `ui/main_window.py`.
-8. **`cd` commands are shortened** in the task line to just the target
-   folder (e.g. `cd "C:/long/path/to/widget" && pytest` → `cd widget/ &&
-   pytest`) — see `_shorten_cd_command()` in `hooks/widget_status.py`. Long
-   absolute paths otherwise dominate the line with no useful signal.
-9. **Model pill**: `Stop` also calls `latest_model()`, which reads the same
+10. **`cd` commands are shortened** in the task line to just the target
+    folder (e.g. `cd "C:/long/path/to/widget" && pytest` → `cd widget/ &&
+    pytest`) — see `_shorten_cd_command()` in `hooks/widget_status.py`. Long
+    absolute paths otherwise dominate the line with no useful signal.
+11. **Model pill**: `Stop` also calls `latest_model()`, which reads the same
    transcript tail as `latest_context_size()` and pulls the `model` field off
    the most recent assistant message — the model actually used for the last
    API call, so a mid-session `/model` switch (or an automatic fallback)
@@ -278,14 +288,15 @@ widget/
   app.py                 # entry point: window, tray icon, poll timer, single-instance lock
   status_store.py        # reads widget-status/*.json, sorts, flags stale/prunes old
   focus_session.ps1      # click-to-focus: walks the process tree, no title matching
-  install.py             # wires/re-wires the 7 hooks; --autostart manages the login Run entry
+  install.py             # wires hooks into Antigravity (~/.gemini) and Claude (~/.claude)
   ui/
     main_window.py         # frameless/translucent/always-on-top window
     session_row.py          # one row's widgets + rendering + click handling
     style.qss                # stylesheet
   hooks/
-    widget_status.py        # the Claude Code hook script (see "How it works")
-  tests/                 # pytest suite for the hook script, status store, and Qt layer
+    antigravity_status.py   # Google Antigravity hook handler
+    widget_status.py        # Claude Code hook handler
+  tests/                 # pytest suite for hooks, status store, and Qt layer
     conftest.py             # puts the project root and hooks/ on sys.path
   docs/
     screenshot.png          # the screenshot embedded at the top of this README

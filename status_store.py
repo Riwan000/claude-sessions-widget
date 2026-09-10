@@ -1,14 +1,21 @@
 """Reads and interprets the status files written by hooks/widget_status.py."""
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 STATUS_DIR = Path.home() / ".claude" / "widget-status"
+WIDGET_DIR = Path(__file__).resolve().parent
+HISTORY_CSV_PATH = WIDGET_DIR / "history.csv"
+DEFAULT_NOTIFICATION_THRESHOLD_SECONDS = float(
+    os.environ.get("WIDGET_NOTIFY_THRESHOLD_SECONDS", "5.0")
+)
 STALE_AFTER_SECONDS = 10 * 60
-PRUNE_AFTER_SECONDS = 24 * 60 * 60
+INACTIVE_TIMEOUT_SECONDS = 15 * 60
+PRUNE_AFTER_SECONDS = INACTIVE_TIMEOUT_SECONDS
 
 ACTIVE_STATUSES = {"idle", "running", "permission"}
 STATUS_RANK = {"permission": 0, "running": 1, "idle": 1}
@@ -40,6 +47,10 @@ class Session:
     current_tool_detail: str = ""
     language_icon: str = ""
     model: str = ""
+    tool: str = "claude"
+    turn_duration: float = 0.0
+    turn_started_at: float = 0.0
+    prompt: str = ""
 
     @property
     def has_tokens(self):
@@ -70,7 +81,7 @@ def _load_one(path):
         return None
 
     age = time.time() - updated_at
-    if age > PRUNE_AFTER_SECONDS:
+    if age > INACTIVE_TIMEOUT_SECONDS:
         path.unlink(missing_ok=True)
         return None
 
@@ -99,6 +110,10 @@ def _load_one(path):
         current_tool_detail=data.get("currentToolDetail", ""),
         language_icon=data.get("languageIcon", ""),
         model=data.get("model") or "",
+        tool=data.get("tool", "claude"),
+        turn_duration=float(data.get("turnDuration") or 0.0),
+        turn_started_at=float(data.get("turnStartedAt") or 0.0),
+        prompt=data.get("prompt") or data.get("task", ""),
     )
 
 
@@ -172,12 +187,32 @@ MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
 def short_model_label(model_id):
     """Turns a raw model id into a short display label for the row pill,
     e.g. 'claude-sonnet-5-20250929' -> 'Sonnet 5', or the older
-    'claude-3-5-sonnet-20241022' -> 'Sonnet 3.5'. Version numbers have
-    appeared both before and after the family name across model
-    generations, so both orderings are handled. Falls back to the raw id
-    for anything unrecognized rather than showing nothing."""
+    'claude-3-5-sonnet-20241022' -> 'Sonnet 3.5', or Gemini models like
+    'gemini-3.7-flash' / 'Gemini 3.7 Flash (High)' -> 'Gemini 3.7 Flash'.
+    Falls back to the raw id for anything unrecognized rather than showing nothing."""
     if not model_id:
         return ""
+
+    lower = model_id.lower().strip()
+    if lower == "auto":
+        return "Auto"
+
+    if "gemini" in lower:
+        clean = re.sub(r"\(.*?\)", "", model_id).strip()
+        parts = [p for p in re.split(r"[-_\s]+", clean) if p]
+        res = []
+        for p in parts:
+            p_lower = p.lower()
+            if p_lower == "gemini":
+                res.append("Gemini")
+            elif p_lower in ("pro", "flash", "ultra", "nano", "lite", "exp"):
+                res.append(p.capitalize())
+            elif re.match(r"^\d+(\.\d+)?$", p):
+                res.append(p)
+            else:
+                res.append(p.capitalize())
+        return " ".join(res)
+
     tokens = [t for t in re.split(r"[-_]", model_id.lower()) if t != "claude"]
     # A trailing 8-digit token is a release date, not a version number.
     if tokens and re.fullmatch(r"\d{8}", tokens[-1]):

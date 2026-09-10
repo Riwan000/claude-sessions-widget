@@ -56,6 +56,11 @@ class TestGetSessions:
         assert status_store.get_sessions() == []
         assert not (status_dir / "ancient.json").exists()
 
+    def test_inactive_sessions_over_15_minutes_are_pruned(self, status_dir):
+        write_session(status_dir, "inactive", "idle", status_store.INACTIVE_TIMEOUT_SECONDS + 5)
+        assert status_store.get_sessions() == []
+        assert not (status_dir / "inactive.json").exists()
+
     def test_underscore_and_corrupt_files_are_skipped(self, status_dir):
         (status_dir / "_window.json").write_text('{"x": 1}', encoding="utf-8")
         (status_dir / "corrupt.json").write_text("{not json", encoding="utf-8")
@@ -130,6 +135,16 @@ class TestGetSessions:
         assert session.model == ""
         assert not session.has_model
 
+    def test_tool_is_loaded(self, status_dir):
+        write_session(status_dir, "t", "running", 5, tool="antigravity")
+        session = status_store.get_sessions()[0]
+        assert session.tool == "antigravity"
+
+    def test_missing_tool_defaults_to_claude(self, status_dir):
+        write_session(status_dir, "t", "running", 5)
+        session = status_store.get_sessions()[0]
+        assert session.tool == "claude"
+
 
 class TestClearFinished:
     def test_removes_only_finished(self, status_dir):
@@ -171,6 +186,12 @@ class TestShortModelLabel:
     def test_older_version_before_family_style(self):
         assert status_store.short_model_label("claude-3-5-sonnet-20241022") == "Sonnet 3.5"
 
+    def test_gemini_models(self):
+        assert status_store.short_model_label("gemini-3.7-flash") == "Gemini 3.7 Flash"
+        assert status_store.short_model_label("Gemini 3.7 Flash (High)") == "Gemini 3.7 Flash"
+        assert status_store.short_model_label("gemini-2.5-pro") == "Gemini 2.5 Pro"
+        assert status_store.short_model_label("auto") == "Auto"
+
     def test_unrecognized_id_falls_back_to_raw(self):
         assert status_store.short_model_label("some-future-model") == "some-future-model"
 
@@ -195,3 +216,31 @@ class TestTokenTier:
     def test_critical_tier_at_200k(self):
         assert status_store.token_tier(200_000) == "critical"
         assert status_store.token_tier(500_000) == "critical"
+
+
+class TestTurnTracking:
+    def test_loads_turn_duration_started_at_and_prompt(self, status_dir):
+        write_session(
+            status_dir,
+            "turn_sess",
+            "finished",
+            age_seconds=1,
+            turnDuration=14.5,
+            turnStartedAt=1700000000.0,
+            prompt="Refactor auth",
+        )
+        sessions = status_store.get_sessions()
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.turn_duration == 14.5
+        assert s.turn_started_at == 1700000000.0
+        assert s.prompt == "Refactor auth"
+
+    def test_falls_back_when_turn_duration_absent(self, status_dir):
+        write_session(status_dir, "legacy_sess", "finished", age_seconds=1)
+        sessions = status_store.get_sessions()
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.turn_duration == 0.0
+        assert s.turn_started_at == 0.0
+        assert s.prompt == "some task"

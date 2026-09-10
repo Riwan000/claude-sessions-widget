@@ -1,8 +1,10 @@
 """Entry point: always-on-top widget showing live Claude Code CLI sessions."""
 
 import sys
+import winsound
+from pathlib import Path
 
-from PySide6.QtCore import QLockFile, Qt, QTimer
+from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -11,6 +13,7 @@ from ui.main_window import MainWindow
 
 POLL_INTERVAL_MS = 2000
 LOCK_PATH = status_store.STATUS_DIR / "_widget.lock"
+FOCUS_SCRIPT_PATH = Path(__file__).resolve().parent / "focus_session.ps1"
 
 
 TRAY_COLOR_OK = "#22c55e"
@@ -79,7 +82,31 @@ def main():
 
     window.permission_state_changed.connect(sync_tray_icon)
 
+    def show_task_completed(session):
+        try:
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
+        duration_text = f"{session.turn_duration:.1f}s" if session.turn_duration > 0 else "done"
+        task_preview = session.task or session.prompt or "Task finished"
+        if len(task_preview) > 120:
+            task_preview = task_preview[:117] + "…"
+
+        tray_state["last_completed_pid"] = session.shell_pid
+
+        tool_label = session.tool.capitalize() if session.tool else "AI"
+        tray.showMessage(
+            f"Task Finished — {session.project}",
+            f"Completed in {duration_text} ({tool_label})\n{task_preview}",
+            QSystemTrayIcon.Information,
+            7000,
+        )
+
+    window.task_completed.connect(show_task_completed)
+
     def show_token_warning(project, total):
+        tray_state["last_completed_pid"] = None
         formatted = status_store.format_tokens_precise(total)
         tray.showMessage(
             "Claude Sessions",
@@ -91,6 +118,32 @@ def main():
         )
 
     window.token_warning.connect(show_token_warning)
+
+    def show_inactive_notification(project):
+        tray_state["last_completed_pid"] = None
+        tray.showMessage(
+            "Claude Sessions",
+            f"Session '{project}' was removed due to 15 minutes of inactivity.",
+            QSystemTrayIcon.Information,
+            5000,
+        )
+
+    window.session_inactive.connect(show_inactive_notification)
+
+    def on_tray_message_clicked():
+        pid = tray_state.pop("last_completed_pid", None)
+        if pid and FOCUS_SCRIPT_PATH.exists():
+            QProcess.startDetached(
+                "powershell.exe",
+                [
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", str(FOCUS_SCRIPT_PATH),
+                    "-ShellPid", str(pid),
+                ],
+            )
+
+    tray.messageClicked.connect(on_tray_message_clicked)
 
     menu = QMenu()
 

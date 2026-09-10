@@ -14,6 +14,7 @@ Claude Code, so everything runs inside a top-level try/except and the
 process always exits 0.
 """
 
+import csv
 import ctypes
 import json
 import os
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import time
 from ctypes import wintypes
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATUS_DIR = Path.home() / ".claude" / "widget-status"
@@ -35,6 +37,7 @@ TH32CS_SNAPPROCESS = 0x00000002
 WIDGET_DIR = Path(__file__).resolve().parent.parent
 WIDGET_PYTHONW = WIDGET_DIR / ".venv" / "Scripts" / "pythonw.exe"
 WIDGET_APP = WIDGET_DIR / "app.py"
+HISTORY_CSV_PATH = WIDGET_DIR / "history.csv"
 
 
 class _PROCESSENTRY32(ctypes.Structure):
@@ -128,6 +131,63 @@ def atomic_write(path, record):
     tmp_path = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
     tmp_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+HISTORY_CSV_HEADERS = [
+    "timestamp",
+    "project",
+    "cli_or_ide",
+    "model",
+    "duration_seconds",
+    "prompt",
+    "tokens_in",
+    "tokens_out",
+    "context_tokens",
+]
+
+
+def append_to_history(record, tool="claude"):
+    """Appends a completed turn to HISTORY_CSV_PATH (widget folder / history.csv).
+    Safely creates the file and header if not present, and appends
+    fields: timestamp, project, cli_or_ide, model, duration_seconds,
+    prompt, tokens_in, tokens_out, context_tokens.
+    Deduplicated per turn using turnStartedAt so multiple stop events
+    don't create duplicate entries."""
+    try:
+        turn_started = record.get("turnStartedAt")
+        if turn_started and record.get("lastLoggedTurn") == turn_started:
+            return
+
+        csv_path = getattr(sys.modules.get(__name__), "HISTORY_CSV_PATH", None) or (
+            WIDGET_DIR / "history.csv"
+        )
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+        with open(csv_path, "a", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            if not file_exists:
+                writer.writerow(HISTORY_CSV_HEADERS)
+
+            tokens = record.get("tokens") or {}
+            now_iso = datetime.now(timezone.utc).isoformat()
+            duration = record.get("turnDuration")
+            row = [
+                now_iso,
+                record.get("project", ""),
+                tool,
+                record.get("model", ""),
+                duration if duration is not None else "",
+                record.get("prompt") or record.get("task", ""),
+                tokens.get("input", 0),
+                tokens.get("output", 0),
+                record.get("contextTokens", 0),
+            ]
+            writer.writerow(row)
+
+        if turn_started:
+            record["lastLoggedTurn"] = turn_started
+    except Exception:
+        pass
 
 
 def truncate(text, limit=MAX_TASK_CHARS):
@@ -391,10 +451,13 @@ def handle_session_start(session_id, cwd, payload, shell_pid):
 
 
 def handle_prompt_submit(session_id, cwd, payload, shell_pid):
-    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
+    now = time.time()
+    path, record = load_or_create(session_id, cwd, now, shell_pid)
     prompt = payload.get("prompt") or payload.get("message") or ""
+    record["prompt"] = prompt
     record["task"] = truncate(prompt)
     record["status"] = "running"
+    record["turnStartedAt"] = now
     # A new turn is starting - drop the previous turn's tool line so it
     # doesn't linger over the new task text until the first tool call.
     record["currentTool"] = ""
@@ -414,7 +477,8 @@ def handle_tool_start(session_id, cwd, payload, shell_pid):
 
 
 def handle_stop(session_id, cwd, payload, shell_pid):
-    path, record = load_or_create(session_id, cwd, time.time(), shell_pid)
+    now = time.time()
+    path, record = load_or_create(session_id, cwd, now, shell_pid)
     transcript_path = payload.get("transcript_path") or record.get("transcriptPath")
     # No recorded offset means prompt-submit never ran for this turn (e.g. a
     # resumed session) - summing from 0 would count the entire transcript as
@@ -434,6 +498,12 @@ def handle_stop(session_id, cwd, payload, shell_pid):
     record["status"] = "finished"
     record["currentTool"] = ""
     record["currentToolDetail"] = ""
+
+    turn_started = record.get("turnStartedAt")
+    if turn_started:
+        record["turnDuration"] = round(max(0.0, now - turn_started), 2)
+
+    append_to_history(record, tool="claude")
     atomic_write(path, record)
 
 
