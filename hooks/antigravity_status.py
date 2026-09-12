@@ -297,6 +297,162 @@ def detect_language_icon(cwd):
     return ""
 
 
+try:
+    import tiktoken
+
+    _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+except Exception:
+    _TIKTOKEN_ENCODER = None
+
+
+def estimate_tokens(text):
+    """Fast token count for a text string using tiktoken with a safe fallback."""
+    if not text:
+        return 0
+    s = str(text)
+    if _TIKTOKEN_ENCODER is not None:
+        try:
+            return len(_TIKTOKEN_ENCODER.encode(s, disallowed_special=()))
+        except Exception:
+            pass
+    # Fallback heuristic: ~4 characters per token
+    return max(1, len(s) // 4)
+
+
+def _step_tokens(step):
+    """Returns (tokens_in, tokens_out) for a single transcript step."""
+    if not isinstance(step, dict):
+        return 0, 0
+    stype = step.get("type")
+    inp = 0
+    out = 0
+
+    if stype == "PLANNER_RESPONSE":
+        thinking = step.get("thinking")
+        if thinking:
+            out += estimate_tokens(thinking)
+        content = step.get("content")
+        if content:
+            out += estimate_tokens(content)
+        for tc in step.get("tool_calls") or []:
+            if isinstance(tc, dict):
+                name = tc.get("name") or ""
+                args = tc.get("args") or {}
+                args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+                out += estimate_tokens(f"{name} {args_str}")
+    else:
+        content = step.get("content")
+        if content:
+            inp += estimate_tokens(content)
+
+    return inp, out
+
+
+def transcript_size(transcript_path):
+    """Byte offset marking end of transcript so far."""
+    if not transcript_path:
+        return 0
+    try:
+        return Path(transcript_path).stat().st_size
+    except OSError:
+        return 0
+
+
+def find_latest_turn_offset(transcript_path):
+    """Finds the byte offset of the latest USER_INPUT line in the transcript."""
+    if not transcript_path:
+        return 0
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return 0
+        size = path.stat().st_size
+        chunk_size = min(size, CONTEXT_TAIL_BYTES)
+        with open(path, "rb") as handle:
+            handle.seek(size - chunk_size)
+            data = handle.read()
+    except OSError:
+        return 0
+
+    cur_pos = size - chunk_size
+    last_user_offset = 0
+    for line in data.splitlines(True):
+        if b'"USER_INPUT"' in line or b"'USER_INPUT'" in line:
+            last_user_offset = cur_pos
+        cur_pos += len(line)
+    return last_user_offset
+
+
+def sum_turn_tokens(transcript_path, offset):
+    """Sums tokens (input, output) generated during the current turn from transcript_path
+    starting from `offset` (the byte offset before the current turn began)."""
+    if not transcript_path:
+        return None
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return None
+        size = path.stat().st_size
+        if offset is None:
+            offset = find_latest_turn_offset(transcript_path)
+        if offset > size:
+            offset = 0
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            handle.seek(offset)
+            new_content = handle.read()
+    except OSError:
+        return None
+
+    tokens_in = 0
+    tokens_out = 0
+    for line in new_content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            step = json.loads(line)
+        except ValueError:
+            continue
+        inp, out = _step_tokens(step)
+        tokens_in += inp
+        tokens_out += out
+
+    if tokens_in == 0 and tokens_out == 0:
+        return None
+    return {"input": tokens_in, "output": tokens_out}
+
+
+def latest_context_size(transcript_path):
+    """Cumulative context tokens across recent conversation history in the transcript."""
+    if not transcript_path:
+        return None
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return None
+        size = path.stat().st_size
+        with open(path, "rb") as handle:
+            if size > CONTEXT_TAIL_BYTES:
+                handle.seek(size - CONTEXT_TAIL_BYTES)
+            content = handle.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    total_tokens = 0
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            step = json.loads(line)
+        except ValueError:
+            continue
+        inp, out = _step_tokens(step)
+        total_tokens += inp + out
+
+    return total_tokens if total_tokens > 0 else None
+
+
 def extract_latest_prompt(transcript_path):
     """Extracts the latest user request text from the Antigravity transcript."""
     if not transcript_path:
@@ -370,6 +526,7 @@ def handle_pre_invocation(session_id, cwd, payload, shell_pid):
     transcript_path = payload.get("transcriptPath")
     if transcript_path:
         record["transcriptPath"] = transcript_path
+        record["transcriptOffset"] = find_latest_turn_offset(transcript_path)
         prompt = extract_latest_prompt(transcript_path)
         if prompt:
             record["prompt"] = prompt
@@ -419,6 +576,21 @@ def handle_stop(session_id, cwd, payload, shell_pid):
     record["status"] = "finished"
     record["currentTool"] = ""
     record["currentToolDetail"] = ""
+
+    transcript_path = payload.get("transcriptPath") or record.get("transcriptPath")
+    if transcript_path:
+        record["transcriptPath"] = transcript_path
+
+    tokens = sum_turn_tokens(transcript_path, record.get("transcriptOffset"))
+    if tokens is not None:
+        record["tokens"] = tokens
+
+    context_tokens = latest_context_size(transcript_path)
+    if context_tokens is not None:
+        record["contextTokens"] = context_tokens
+
+    if transcript_path:
+        record["transcriptOffset"] = transcript_size(transcript_path)
 
     model = payload.get("modelName")
     if model:

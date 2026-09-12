@@ -1,6 +1,7 @@
 """Tests for history CSV logging (hooks/widget_status.py and hooks/antigravity_status.py)."""
 
 import csv
+import json
 import time
 from pathlib import Path
 
@@ -171,3 +172,57 @@ class TestHistoryCSV:
         assert reader[1][3] == "gemini-2.5-pro"
         assert reader[1][4] == "7.8"
         assert reader[1][5] == "Run pytest"
+
+    def test_antigravity_status_handle_stop_writes_history_with_tokens(
+        self, status_dir, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(ag, "spawn_widget", lambda: None)
+        transcript = tmp_path / "transcript_full.jsonl"
+        steps = [
+            json.dumps({"step_index": 0, "type": "USER_INPUT", "content": "Run tests and summarize"}),
+            json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "thinking": "Let me run tests", "tool_calls": [{"name": "run_command", "args": {"CommandLine": "pytest"}}]}),
+            json.dumps({"step_index": 2, "type": "GENERIC", "content": "10 passed in 0.5s"}),
+            json.dumps({"step_index": 3, "type": "PLANNER_RESPONSE", "content": "All tests passed successfully!"}),
+        ]
+        transcript.write_text("\n".join(steps) + "\n", encoding="utf-8")
+
+        t0 = 3000.0
+        monkeypatch.setattr(time, "time", lambda: t0)
+        ag.handle_pre_invocation(
+            "ag2",
+            "C:/x/myproject",
+            {
+                "conversationId": "ag2",
+                "modelName": "gemini-3.7-flash-medium",
+                "transcriptPath": str(transcript),
+            },
+            789,
+        )
+
+        monkeypatch.setattr(time, "time", lambda: t0 + 4.5)
+        ag.handle_stop(
+            "ag2",
+            "C:/x/myproject",
+            {
+                "conversationId": "ag2",
+                "modelName": "gemini-3.7-flash-medium",
+                "transcriptPath": str(transcript),
+            },
+            789,
+        )
+
+        csv_path = status_dir / "history.csv"
+        assert csv_path.exists()
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = list(csv.reader(f))
+
+        assert len(reader) == 2
+        row = reader[1]
+        assert row[1] == "myproject"
+        assert row[2] == "antigravity"
+        assert row[3] == "gemini-3.7-flash-medium"
+        assert row[4] == "4.5"
+        assert int(row[6]) > 0  # tokens_in
+        assert int(row[7]) > 0  # tokens_out
+        assert int(row[8]) > 0  # context_tokens
+

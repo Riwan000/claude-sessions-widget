@@ -222,3 +222,106 @@ class TestHandlers:
         assert record["status"] == "finished"
         assert record["currentTool"] == ""
         assert record["currentToolDetail"] == ""
+
+
+class TestTokenEstimation:
+    def test_estimate_tokens_basic(self):
+        assert ags.estimate_tokens("") == 0
+        assert ags.estimate_tokens(None) == 0
+        tokens = ags.estimate_tokens("hello world this is a test")
+        assert tokens > 0
+
+    def test_estimate_tokens_fallback_without_tiktoken(self, monkeypatch):
+        monkeypatch.setattr(ags, "_TIKTOKEN_ENCODER", None)
+        assert ags.estimate_tokens("12345678") == 2
+        assert ags.estimate_tokens("") == 0
+
+    def test_step_tokens_planner_response(self):
+        step = {
+            "type": "PLANNER_RESPONSE",
+            "thinking": "Thinking about the solution",
+            "content": "Here is the response",
+            "tool_calls": [
+                {"name": "view_file", "args": {"AbsolutePath": "C:/a.py"}}
+            ],
+        }
+        inp, out = ags._step_tokens(step)
+        assert inp == 0
+        assert out > 0
+
+    def test_step_tokens_user_input_and_generic(self):
+        user_step = {"type": "USER_INPUT", "content": "hello"}
+        tool_step = {"type": "GENERIC", "content": "file contents here"}
+        u_in, u_out = ags._step_tokens(user_step)
+        assert u_in > 0
+        assert u_out == 0
+        t_in, t_out = ags._step_tokens(tool_step)
+        assert t_in > 0
+        assert t_out == 0
+
+
+class TestTranscriptTokens:
+    def test_multi_turn_token_summing(self, tmp_path):
+        transcript = tmp_path / "transcript_full.jsonl"
+        turn1_steps = [
+            json.dumps({"step_index": 0, "type": "USER_INPUT", "content": "turn 1 prompt"}),
+            json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "thinking": "plan 1", "tool_calls": [{"name": "cmd", "args": {}}]}),
+            json.dumps({"step_index": 2, "type": "GENERIC", "content": "cmd output"}),
+            json.dumps({"step_index": 3, "type": "PLANNER_RESPONSE", "content": "turn 1 done"}),
+        ]
+        transcript.write_text("\n".join(turn1_steps) + "\n", encoding="utf-8")
+        turn1_offset = ags.find_latest_turn_offset(str(transcript))
+        assert turn1_offset == 0
+
+        tokens_t1 = ags.sum_turn_tokens(str(transcript), turn1_offset)
+        assert tokens_t1 is not None
+        assert tokens_t1["input"] > 0
+        assert tokens_t1["output"] > 0
+
+        turn2_offset = transcript.stat().st_size
+        turn2_steps = [
+            json.dumps({"step_index": 4, "type": "USER_INPUT", "content": "turn 2 prompt"}),
+            json.dumps({"step_index": 5, "type": "PLANNER_RESPONSE", "content": "turn 2 done"}),
+        ]
+        with open(transcript, "a", encoding="utf-8") as f:
+            f.write("\n".join(turn2_steps) + "\n")
+
+        # Turn 2 sum should only count turn 2 steps
+        tokens_t2 = ags.sum_turn_tokens(str(transcript), turn2_offset)
+        assert tokens_t2 is not None
+        assert tokens_t2["input"] < tokens_t1["input"]  # t2 only has 1 user prompt, t1 had prompt + tool output
+
+        # Context tokens should sum everything
+        ctx = ags.latest_context_size(str(transcript))
+        assert ctx == tokens_t1["input"] + tokens_t1["output"] + tokens_t2["input"] + tokens_t2["output"]
+
+    def test_handle_stop_populates_tokens(self, status_dir, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(ags, "spawn_widget", lambda: None)
+        transcript = tmp_path / "transcript_full.jsonl"
+        steps = [
+            json.dumps({"step_index": 0, "type": "USER_INPUT", "content": "write code"}),
+            json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "content": "done"}),
+        ]
+        transcript.write_text("\n".join(steps) + "\n", encoding="utf-8")
+
+        ags.handle_pre_invocation(
+            "sess-tok",
+            "C:/proj",
+            {"conversationId": "sess-tok", "transcriptPath": str(transcript)},
+            100,
+        )
+        capsys.readouterr()
+
+        ags.handle_stop(
+            "sess-tok",
+            "C:/proj",
+            {"conversationId": "sess-tok", "transcriptPath": str(transcript)},
+            100,
+        )
+        capsys.readouterr()
+
+        record = json.loads((status_dir / "sess-tok.json").read_text(encoding="utf-8"))
+        assert record["tokens"]["input"] > 0
+        assert record["tokens"]["output"] > 0
+        assert record["contextTokens"] > 0
+
