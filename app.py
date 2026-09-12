@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import status_store
+from ui.avatar_window import AvatarWindow
 from ui.main_window import MainWindow
 
 POLL_INTERVAL_MS = 2000
@@ -58,7 +59,9 @@ def main():
         sys.exit(0)
 
     window = MainWindow()
-    window.show()
+    avatar = AvatarWindow()
+    window.set_anchor_avatar(avatar)
+    avatar.show()
 
     icon_ok = make_tray_icon(TRAY_COLOR_OK)
     icon_permission = make_tray_icon(TRAY_COLOR_PERMISSION)
@@ -145,21 +148,66 @@ def main():
 
     tray.messageClicked.connect(on_tray_message_clicked)
 
+    def on_avatar_clicked():
+        if window.isVisible():
+            window.hide()
+            avatar.set_paused(False)
+            avatar.set_bubble_visible(True)
+            toggle_action.setText("Show")
+        else:
+            window.position_above(avatar.x(), avatar.y(), avatar.width())
+            window.show()
+            window.raise_()
+            avatar.set_paused(True)
+            avatar.set_bubble_visible(False)
+            toggle_action.setText("Hide")
+
+    avatar.clicked.connect(on_avatar_clicked)
+
     menu = QMenu()
 
-    toggle_action = QAction("Hide")
+    toggle_action = QAction("Show")
 
     def toggle_visibility():
         if window.isVisible():
             window.hide()
+            avatar.set_paused(False)
+            avatar.set_bubble_visible(True)
             toggle_action.setText("Show")
         else:
+            if avatar_action.isChecked() and avatar.isVisible():
+                window.position_above(avatar.x(), avatar.y(), avatar.width())
+                avatar.set_paused(True)
+                avatar.set_bubble_visible(False)
             window.show()
             window.raise_()
             toggle_action.setText("Hide")
 
     toggle_action.triggered.connect(toggle_visibility)
     menu.addAction(toggle_action)
+
+    avatar_action = QAction("Avatar Mode")
+    avatar_action.setCheckable(True)
+    avatar_action.setChecked(True)
+
+    def on_avatar_mode_toggled(checked):
+        if checked:
+            avatar.show()
+            avatar.set_sessions(status_store.get_sessions())
+            if window.isVisible():
+                window.position_above(avatar.x(), avatar.y(), avatar.width())
+                avatar.set_paused(True)
+                avatar.set_bubble_visible(False)
+        else:
+            avatar.hide()
+            avatar.set_paused(False)
+            avatar.set_bubble_visible(True)
+            window.show()
+            window.raise_()
+            toggle_action.setText("Hide")
+
+    avatar_action.toggled.connect(on_avatar_mode_toggled)
+    menu.addAction(avatar_action)
 
     clear_action = QAction("Clear finished")
     clear_action.triggered.connect(lambda: (status_store.clear_finished(), window.refresh()))
@@ -179,12 +227,25 @@ def main():
 
     def sync_hide_state():
         toggle_action.setText("Show" if not window.isVisible() else "Hide")
+        if not window.isVisible():
+            avatar.set_paused(False)
+            avatar.set_bubble_visible(True)
 
     window.hidden_to_tray.connect(sync_hide_state)
 
+    def on_poll():
+        window.refresh()
+        sessions = status_store.get_sessions()
+        if avatar_action.isChecked():
+            avatar.set_sessions(sessions)
+        else:
+            quit_if_idle(app)
+
+    # Initial sync
+    on_poll()
+
     timer = QTimer()
-    timer.timeout.connect(window.refresh)
-    timer.timeout.connect(lambda: quit_if_idle(app))
+    timer.timeout.connect(on_poll)
     timer.start(POLL_INTERVAL_MS)
 
     sys.exit(app.exec())

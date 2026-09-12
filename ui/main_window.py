@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QProcess, QTimer, Signal
+from PySide6.QtCore import QPoint, QProcess, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -106,6 +106,7 @@ class MainWindow(QWidget):
         self._prev_statuses = {}  # session_id -> status for transition detection
         self._blink_on = False
         self._collapsed = bool(geometry.get("collapsed", False))
+        self._anchor_avatar = None
         self._build_ui()
         self.setStyleSheet(STYLE_PATH.read_text(encoding="utf-8"))
         self._apply_collapsed_state()
@@ -171,6 +172,7 @@ class MainWindow(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
@@ -312,6 +314,27 @@ class MainWindow(QWidget):
             return int(screen.availableGeometry().height() * MAX_WINDOW_HEIGHT_RATIO)
         return MAX_WINDOW_HEIGHT_FALLBACK
 
+    def set_anchor_avatar(self, avatar):
+        self._anchor_avatar = avatar
+
+    def position_above(self, x, y, width=190):
+        self._fit_height_to_content()
+        center_x = x + (width // 2)
+        screen = QApplication.screenAt(QPoint(int(center_x), int(y))) or self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+
+        target_w = self.width()
+        target_h = self.height()
+
+        target_x = center_x - (target_w // 2)
+        target_y = y - target_h - 8  # clearance above avatar
+
+        if avail is not None:
+            target_x = max(avail.x() + 10, min(target_x, avail.x() + avail.width() - target_w - 10))
+            target_y = max(avail.y() + 10, target_y)
+
+        self.move(int(target_x), int(target_y))
+
     def _fit_height_to_content(self):
         self.list_layout.invalidate()
         self.list_layout.activate()
@@ -327,7 +350,13 @@ class MainWindow(QWidget):
 
         current = self.geometry()
         if target_height != current.height():
-            self.resize(current.width(), target_height)
+            delta = target_height - current.height()
+            if self._anchor_avatar and self._anchor_avatar.isVisible():
+                # Expand upward so the bottom stays aligned right above the avatar
+                new_y = current.y() - delta
+                self.setGeometry(current.x(), new_y, current.width(), target_height)
+            else:
+                self.resize(current.width(), target_height)
 
     def mousePressEvent(self, event):
         # The auto-height logic owns the vertical dimension, but width is
