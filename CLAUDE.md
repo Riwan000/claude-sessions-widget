@@ -27,7 +27,7 @@ Processes talking through the filesystem (`~/.claude/widget-status/`):
 
 1. `hooks/widget_status.py` — invoked by Claude Code on 7 hook events.
 2. `hooks/antigravity_status.py` — invoked by Google Antigravity on PreInvocation, PreToolUse, PostToolUse, and Stop events.
-3. `app.py` + `ui/` — polls the status directory every 2s via `status_store.py` and renders a row per session with tool source badges (🟣 Claude, 🔷 Antigravity).
+3. `app.py` + `ui/` — polls the status directory every 2s via `status_store.py`, renders a row per session with official tool source icons (Claude, Antigravity), and coordinates the Baymax desktop companion avatar (`ui/avatar_window.py`).
 
 `status_store.py` is imported only by the UI side. `focus_session.ps1` is
 spawned on row click to foreground a session's terminal or window.

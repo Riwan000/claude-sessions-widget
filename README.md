@@ -1,29 +1,38 @@
-# Claude Sessions Widget
+# AI Sessions Widget & Companion
 
 **Windows only** — the click-to-focus and autostart features are built on
 Win32 APIs (`winreg`, `AttachThreadInput`/`SetForegroundWindow` via
 `focus_session.ps1`) with no cross-platform equivalent implemented.
 
-> Unofficial, community-built tool. Not affiliated with, endorsed by, or
-> supported by Anthropic. "Claude" and "Claude Code" are Anthropic's
-> trademarks, used here only to describe compatibility.
+> Unofficial, community-built tool. Compatible with Anthropic's **Claude Code**
+> and Google's **Antigravity**. Not affiliated with, endorsed by, or supported by
+> Anthropic or Google. Trademarks belong to their respective owners.
 
-An always-on-top desktop widget that shows, live, every Claude Code CLI session
-running on this machine: project (folder name), current task, and whether it's
-running, idle, finished, possibly closed, or waiting on your permission. The
-window height grows and shrinks automatically with the number of sessions.
+An always-on-top desktop widget and roaming desktop companion (Baymax) that
+tracks, live, every Claude Code CLI and Google Antigravity session running on
+your machine: project, current tool, prompt, model, per-turn tokens, full context
+size, and whether it's running, idle, finished, or waiting on your permission.
 
-![Claude Sessions Widget showing a permission alert, running/idle/finished sessions, the model pill, and the token-tier pill colors on both the per-turn and context pills](docs/screenshot.png)
+![AI Sessions Widget in Emerald theme showing permission alert, Google Antigravity and Claude Code sessions, model and context pills, and Baymax companion roaming the taskbar](docs/screenshot.png)
 
 *(Rendered from synthetic demo data for illustration — not a real session.)*
 
+## Key Highlights
+
+- **Multi-Tool Live Tracking**: Seamlessly monitors active sessions from **Claude Code** and **Google Antigravity** (with official tool badges for Claude, Antigravity, and Cursor).
+- **Desktop Avatar Companion (Baymax)**: An animated procedural companion roaming along your taskbar with Big Hero 6 mechanics. Waddles with real-time speech bubbles, sweeps vertical scan beams while tools run, suits up in flying superhero mech armor when permissions are needed, and deflates into his recharge station box when idle.
+- **Click-to-Anchor Pop-up**: Clicking Baymax opens the full sessions window anchored directly above his head; the window automatically expands and contracts upward so it stays perfectly aligned. Toggle between Avatar Mode and Standalone Widget Mode anytime via the system tray.
+- **Cyberpunk / Emerald Theme**: Modern glassmorphic styling with glowing status bars, live blinking permission alerts, and clear tier-colored token and context badges.
+- **Deep Metrics**: Real-time per-turn token usage, cumulative context window size tracking, model pills (e.g. `Sonnet 3.7`, `Gemini 2.5 Pro`, `Opus 3.5`), and task duration.
+- **Task Completion Notifications & Audio Chime**: Tray alert with audio chime on long-running task completions (>5s); click to instantly foreground the corresponding terminal or IDE window.
+- **CSV History Log**: Append-only logging of completed tasks across all sessions into `history.csv`.
+
 ## How it works
 
-1. Seven hooks are wired into the **global** `~/.claude/settings.json`
-   (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Notification`,
-   `PostToolUse`, `Stop`, `SessionEnd`). Each one calls
-   `hooks/widget_status.py <event>` with the Claude Code hook JSON on stdin.
-2. That script writes one JSON file per session to `~/.claude/widget-status/`:
+1. **Dual Hook Architecture**:
+   - **Claude Code**: 7 hooks are wired into the global `~/.claude/settings.json` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Notification`, `PostToolUse`, `Stop`, `SessionEnd`), calling `hooks/widget_status.py <event>` with the hook payload on stdin.
+   - **Google Antigravity**: 4 lifecycle hooks are wired into `~/.gemini/config/hooks.json` (`PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop`), calling `hooks/antigravity_status.py <event>` with event JSON on stdin.
+2. Both hook scripts write standardized session JSON records to `~/.claude/widget-status/`:
    - `SessionStart` → creates the file, `status: "idle"`, and sniffs
      `languageIcon` once from top-level marker files in the project
      directory (`pyproject.toml`/`requirements.txt`/`setup.py`/any `*.py`
@@ -145,6 +154,33 @@ window height grows and shrinks automatically with the number of sessions.
    token/context pills, it's only known once a turn completes, so a
    freshly-started session shows no model pill until its first response
    finishes.
+12. **Official tool icons**: Session rows dynamically show crisp official
+    source icons (`ui/assets/claude.png`, `ui/assets/antigravity.png`,
+    `ui/assets/cursor.png`) with clean fallback badges (`🤖`, `🌊`, etc.) for
+    custom or third-party tools.
+13. **Antigravity token & context telemetry**: `hooks/antigravity_status.py`
+    inspects session JSONL transcripts at turn boundaries, estimating per-turn
+    tokens (via `tiktoken` with heuristic fallback) and computing full cumulative
+    conversation context size across turns. Completed tasks are appended to
+    `history.csv` with complete token metrics.
+14. **Baymax Desktop Companion Mechanics**:
+    - **60 FPS procedural rendering**: Rendered entirely through vector and pixel
+      math with zero external sprite dependencies.
+    - **Live status bubble**: Clean matte speech bubble hovering above Baymax,
+      showing the current prompt and project name. If multiple sessions run
+      concurrently, the bubble cycles through active tasks every 3 seconds.
+    - **Reactive State Machine**:
+      - `in_box_sleeping`: Resting in his Malachite & Spruce recharge station box
+        when idle.
+      - `inflating_out`: Automatically inflates up when a prompt is submitted.
+      - `waddling`: Signature slow waddle along the taskbar during work.
+      - `working`: Sweeping vertical scan beam across his chassis while tools run.
+      - `permission`: Suits up in superhero mech armor with jet thrusters and hovers
+        in flight along the taskbar when a session needs approval!
+      - `deflating_in`: Safely packs away into his recharge box when sessions finish.
+    - **Smart Anchor Pop-up**: Left-clicking Baymax opens the sessions list
+      directly above his head. If sessions are added or finished, the window
+      smoothly expands and contracts upward so it stays anchored to Baymax.
 
 ## Setup
 
@@ -152,15 +188,21 @@ window height grows and shrinks automatically with the number of sessions.
 cd widget
 C:\Python313\python.exe -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
-C:\Python313\python.exe install.py
+
+# Wire hooks for both Claude Code and Google Antigravity:
+C:\Python313\python.exe install.py --all
+
+# Or wire hooks individually:
+C:\Python313\python.exe install.py --claude
+C:\Python313\python.exe install.py --antigravity
 ```
 
-`install.py` wires the 7 hooks into `~/.claude/settings.json` (backing it up
-first) and is idempotent — re-run it any time you move this project folder
-or switch Python installs, and it updates the existing entries in place.
-Run it with the Python you want the hooks to use (the hook script is
-stdlib-only; avoid the venv interpreter so the hooks don't break if the
-venv is rebuilt).
+`install.py` wires the hooks into `~/.claude/settings.json` and
+`~/.gemini/config/hooks.json` (backing up each config file first) and is
+idempotent — re-run it any time you move this project folder or switch Python
+installs, and it updates the existing entries in place. Run it with the Python
+you want the hooks to use (stdlib-only hook scripts avoid breakages if the venv
+is rebuilt).
 
 ## Tests
 
@@ -199,16 +241,35 @@ window edge to change the width. Height is automatic — it grows and shrinks
 with the number of sessions shown, capped at 80% of your screen height (it
 scrolls internally beyond that).
 
+### Desktop Companion (Baymax) & Controls
+
+- **Click Baymax**: Left-clicking the Baymax avatar on your taskbar summons or hides
+  the full sessions window directly above his head. The window smartly expands
+  upward so the anchor stays aligned.
+- **Drag & Reposition**: Click and drag Baymax to reposition him along your
+  taskbar or across multi-monitor setups.
+- **Speech Bubble Ticker**: Baymax's matte speech bubble automatically displays
+  the latest active prompt and tool. When running concurrent sessions, it rotates
+  every 3 seconds through all active tasks.
+
 The **▾ button** in the header collapses the window down to just the header
 bar, hiding the session list — useful when you want the widget parked on
 screen without it taking up room. Click **▸** to expand it again. The
 collapsed state is saved to `_window.json` alongside the position and width,
 so it survives a restart.
 
-It also adds a system tray icon with a right-click menu: **Show/Hide**,
-**Clear finished**, **Quit**. The icon doubles as a status light: green
-normally, red while any session is waiting on a permission prompt — so
-you still get the signal when the window itself is hidden to the tray.
+### System Tray
+
+The widget adds a system tray icon with a right-click menu:
+- **Show / Hide**: toggle window visibility.
+- **Avatar Mode**: toggle checkbox to switch between roaming Baymax desktop
+  companion mode and classic standalone window mode.
+- **Clear finished**: dismiss finished sessions from view.
+- **Quit**: exit the application.
+
+The tray icon doubles as a status light: green normally, red while any
+session is waiting on a permission prompt — so you still get the signal even
+when the window is hidden.
 
 **Click any row** to jump to that session's terminal. This is *not* done by
 matching window/tab titles — an earlier version tried that and it was
@@ -264,19 +325,19 @@ matching them fixes it).
 
 ## Lifecycle
 
-The widget starts and stops itself around your Claude Code CLI sessions —
-no login autostart needed:
+The widget starts and stops itself around your sessions — no login autostart needed:
 
-- **Start**: the `SessionStart` hook (`hooks/widget_status.py:spawn_widget`)
-  launches the widget with the venv's `pythonw.exe` (no console window) the
-  first time a Claude Code session starts. The single-instance lock makes
-  every subsequent session's launch attempt a harmless no-op.
-- **Stop**: the widget polls its status directory every 2s
-  (`app.py:quit_if_idle`) and quits once no session status file remains —
-  i.e. once the last session's `SessionEnd` hook has fired.
+- **Start**: The `SessionStart` hook (`hooks/widget_status.py`) or `PreInvocation`
+  hook (`hooks/antigravity_status.py`) launches the widget with the venv's
+  `pythonw.exe` (no console window) the first time any session begins. The
+  single-instance lock makes every subsequent launch attempt a harmless no-op.
+- **Stop**: In standalone mode, the widget polls its status directory every 2s
+  (`app.py:quit_if_idle`) and quits once no session status files remain. In Avatar
+  Mode, Baymax deflates back into his recharge station box and sleeps until the
+  next session arrives.
 
-Optional: `install.py --autostart` / `--remove-autostart` still registers a
-`ClaudeSessionsWidget` value under
+Optional: `install.py --autostart` / `--remove-autostart` registers an
+`AISessionsWidget` value under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` if you'd rather have
 the widget up before your first session starts. A plain `install.py` run
 refreshes the entry's paths if it already exists but never creates one.
@@ -289,17 +350,26 @@ widget/
   status_store.py        # reads widget-status/*.json, sorts, flags stale/prunes old
   focus_session.ps1      # click-to-focus: walks the process tree, no title matching
   install.py             # wires hooks into Antigravity (~/.gemini) and Claude (~/.claude)
+  history.csv            # append-only log of all completed tasks and token metrics
   ui/
-    main_window.py         # frameless/translucent/always-on-top window
-    session_row.py          # one row's widgets + rendering + click handling
-    style.qss                # stylesheet
+    avatar_window.py     # Baymax procedural desktop companion roaming the taskbar
+    main_window.py       # frameless/translucent/always-on-top sessions window
+    session_row.py       # session row widgets, status indicators, and pill badges
+    style.qss            # modern Emerald glassmorphism stylesheet
+    assets/              # official tool badges (claude.png, antigravity.png, cursor.png)
   hooks/
-    antigravity_status.py   # Google Antigravity hook handler
-    widget_status.py        # Claude Code hook handler
-  tests/                 # pytest suite for hooks, status store, and Qt layer
-    conftest.py             # puts the project root and hooks/ on sys.path
+    antigravity_status.py# Google Antigravity hook handler (tokens, tools, context)
+    widget_status.py     # Claude Code hook handler (tokens, tools, context)
+  tests/                 # pytest suite for hooks, status store, avatar, and Qt layer
+    conftest.py          # puts project root and hooks/ on sys.path
+    test_avatar_window.py# avatar state machine, physics, and interaction tests
+    test_antigravity_status.py
+    test_history_csv.py
+    test_status_store.py
+    test_ui_render.py
+    test_widget_status.py
   docs/
-    screenshot.png          # the screenshot embedded at the top of this README
+    screenshot.png       # visual showcase embedded at the top of this README
   requirements.txt       # runtime dep (PySide6)
   requirements-dev.txt   # runtime + test deps (pytest)
 ```
