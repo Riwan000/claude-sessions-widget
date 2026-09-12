@@ -414,7 +414,8 @@ class TestToolBadge:
         from ui.session_row import SessionRow
 
         row = SessionRow(make_session(tool="claude"))
-        assert row.tool_badge_label.text() == "🟣"
+        assert row.tool_badge_label.pixmap() is not None
+        assert not row.tool_badge_label.pixmap().isNull()
         assert "[Claude]" in row.toolTip()
         row.deleteLater()
 
@@ -422,8 +423,17 @@ class TestToolBadge:
         from ui.session_row import SessionRow
 
         row = SessionRow(make_session(tool="antigravity"))
-        assert row.tool_badge_label.text() == "🔷"
+        assert row.tool_badge_label.pixmap() is not None
+        assert not row.tool_badge_label.pixmap().isNull()
         assert "[Antigravity]" in row.toolTip()
+        row.deleteLater()
+
+    def test_fallback_tool_badge(self, qapp):
+        from ui.session_row import SessionRow
+
+        row = SessionRow(make_session(tool="windsurf"))
+        assert row.tool_badge_label.text() == "🌊"
+        assert "[Windsurf]" in row.toolTip()
         row.deleteLater()
 
 

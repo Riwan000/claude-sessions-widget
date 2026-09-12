@@ -1,10 +1,37 @@
 """A single session row: status dot + accent bar, project name, task, time."""
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFontMetrics, QIcon, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 import status_store
+
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+TOOL_ICONS = {
+    "claude": ASSETS_DIR / "claude.png",
+    "antigravity": ASSETS_DIR / "antigravity.png",
+    "cursor": ASSETS_DIR / "cursor.png",
+}
+
+_TOOL_PIXMAP_CACHE = {}
+
+
+def get_tool_pixmap(tool_name: str, size: int = 16) -> QPixmap | None:
+    cache_key = (tool_name, size)
+    if cache_key in _TOOL_PIXMAP_CACHE:
+        return _TOOL_PIXMAP_CACHE[cache_key]
+
+    path = TOOL_ICONS.get(tool_name)
+    if path and path.exists():
+        icon = QIcon(str(path))
+        pixmap = icon.pixmap(size, size)
+        if not pixmap.isNull():
+            _TOOL_PIXMAP_CACHE[cache_key] = pixmap
+            return pixmap
+    return None
 
 STATUS_LABELS = {
     "idle": "waiting",
@@ -118,6 +145,7 @@ class SessionRow(QFrame):
 
         self.tool_badge_label = QLabel()
         self.tool_badge_label.setObjectName("toolBadgeLabel")
+        self.tool_badge_label.setAlignment(Qt.AlignCenter)
         header.addWidget(self.tool_badge_label, alignment=Qt.AlignVCenter)
 
         self.project_label = QLabel()
@@ -183,8 +211,16 @@ class SessionRow(QFrame):
             _apply_property(widget, "blink", "off")
 
         tool_name = session.tool.lower() if hasattr(session, "tool") and session.tool else "claude"
-        badge = TOOL_BADGES.get(tool_name, "🤖")
-        self.tool_badge_label.setText(badge)
+        pixmap = get_tool_pixmap(tool_name, size=16)
+        if pixmap:
+            self.tool_badge_label.setPixmap(pixmap)
+            self.tool_badge_label.setFixedSize(16, 16)
+        else:
+            self.tool_badge_label.setPixmap(QPixmap())
+            badge = TOOL_BADGES.get(tool_name, "🤖")
+            self.tool_badge_label.setText(badge)
+            self.tool_badge_label.setMinimumSize(0, 0)
+            self.tool_badge_label.setMaximumSize(16777215, 16777215)
         self.tool_badge_label.setToolTip(f"{tool_name.capitalize()} session")
 
         self.project_label.setText(session.project)
